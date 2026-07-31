@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.status import (
     HTTP_200_OK,
+    HTTP_204_NO_CONTENT,
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
     HTTP_503_SERVICE_UNAVAILABLE,
@@ -22,9 +23,12 @@ from core.models import Aspirante, Certificado, Convocatoria, Sesion, Vacante
 
 from .serializers import (
     AspiranteSerializer,
+    CambioPasswordSerializer,
     CertificadoSerializer,
     ConvocatoriaSerializer,
     LoginSerializer,
+    PerfilUpdateSerializer,
+    UsuarioSerializer,
     VacanteSerializer,
 )
 
@@ -36,6 +40,7 @@ def api_root(request):
         {
             "name": "DJ Try API",
             "health": reverse("api:health", request=request),
+            "usuario_actual": reverse("api:usuario-actual", request=request),
             "aspirantes": reverse("api:aspirante-list", request=request),
             "convocatorias": reverse("api:convocatoria-list", request=request),
             "vacantes": reverse("api:vacante-list", request=request),
@@ -72,15 +77,12 @@ def token_response(usuario, refresh):
     access["email"] = usuario.email
     access["nombre_completo"] = usuario.nombre_completo
 
+    # Se reutiliza UsuarioSerializer para que el login entregue exactamente la
+    # misma forma que GET /auth/me/ (fechas, roles y aspirante incluidos).
     return {
         "access": str(access),
         "refresh": str(refresh),
-        "usuario": {
-            "id": str(usuario.id),
-            "nombre_completo": usuario.nombre_completo,
-            "email": usuario.email,
-            "estado": usuario.estado,
-        },
+        "usuario": UsuarioSerializer(usuario).data,
     }
 
 
@@ -169,6 +171,49 @@ def logout(request):
         )
 
     return Response({"detail": "Sesión cerrada."}, status=HTTP_200_OK)
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def usuario_actual(request):
+    """Consulta (GET) o edita (PATCH) el perfil del usuario autenticado."""
+    if request.method == "PATCH":
+        serializer = PerfilUpdateSerializer(
+            request.user, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+    return Response(UsuarioSerializer(request.user).data, status=HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cambiar_password(request):
+    """
+    Cambia la contraseña del usuario autenticado.
+
+    Por seguridad se revocan las sesiones abiertas. Si el cliente envía su
+    `refresh`, esa sesión se conserva para no expulsarlo del navegador actual;
+    si no lo envía, se revocan todas.
+    """
+    serializer = CambioPasswordSerializer(
+        data=request.data, context={"usuario": request.user}
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+
+    sesiones = Sesion.objects.filter(
+        usuario=request.user, revocada_en__isnull=True
+    )
+
+    raw_refresh = request.data.get("refresh")
+    if raw_refresh:
+        sesiones = sesiones.exclude(refresh_token_hash=token_hash(raw_refresh))
+
+    sesiones.update(revocada_en=timezone.now())
+
+    return Response(status=HTTP_204_NO_CONTENT)
 
 
 class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):

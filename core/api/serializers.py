@@ -1,4 +1,8 @@
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from core.models import (
@@ -179,3 +183,147 @@ class LoginSerializer(serializers.Serializer):
 
         attrs["usuario"] = usuario
         return attrs
+
+
+class UsuarioSerializer(serializers.ModelSerializer):
+    roles = serializers.SerializerMethodField()
+    aspirante = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Usuario
+        fields = (
+            "id",
+            "nombre_completo",
+            "email",
+            "estado",
+            "email_verificado_en",
+            "ultimo_acceso_en",
+            "creado_en",
+            "actualizado_en",
+            "roles",
+            "aspirante",
+        )
+
+    def get_roles(self, usuario):
+        return [
+            {
+                "id": usuario_rol.rol_id,
+                "clave": usuario_rol.rol.clave,
+                "nombre": usuario_rol.rol.nombre,
+            }
+            for usuario_rol in usuario.usuarios_roles.select_related("rol")
+        ]
+
+    def get_aspirante(self, usuario):
+        try:
+            aspirante = usuario.aspirante
+        except Aspirante.DoesNotExist:
+            return None
+
+        if aspirante.eliminado_en is not None:
+            return None
+
+        return {
+            "id": aspirante.id,
+            "matricula": aspirante.matricula,
+            "telefono": aspirante.telefono,
+            "cedula_profesional": aspirante.cedula_profesional,
+            "estado_expediente": aspirante.estado_expediente,
+        }
+
+
+class PerfilUpdateSerializer(serializers.Serializer):
+    """Edición de los datos propios del usuario autenticado."""
+
+    nombre_completo = serializers.CharField(max_length=180, required=False)
+    telefono = serializers.CharField(
+        max_length=30, required=False, allow_blank=True, allow_null=True
+    )
+
+    def validate_nombre_completo(self, value):
+        nombre = value.strip()
+        if not nombre:
+            raise serializers.ValidationError(
+                "El nombre completo es obligatorio."
+            )
+        return nombre
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        try:
+            aspirante = instance.aspirante
+        except Aspirante.DoesNotExist:
+            aspirante = None
+
+        if "telefono" in validated_data and aspirante is None:
+            raise serializers.ValidationError(
+                {"telefono": "El usuario no tiene un aspirante relacionado."}
+            )
+
+        ahora = timezone.now()
+        if "nombre_completo" in validated_data:
+            instance.nombre_completo = validated_data["nombre_completo"]
+            instance.actualizado_en = ahora
+            instance.save(update_fields=["nombre_completo", "actualizado_en"])
+            if aspirante is not None:
+                aspirante.nombre_completo = validated_data["nombre_completo"]
+
+        campos_aspirante = []
+        if "nombre_completo" in validated_data and aspirante is not None:
+            campos_aspirante.append("nombre_completo")
+        if "telefono" in validated_data:
+            aspirante.telefono = validated_data["telefono"]
+            campos_aspirante.append("telefono")
+        if campos_aspirante:
+            aspirante.actualizado_en = ahora
+            aspirante.save(
+                update_fields=[*campos_aspirante, "actualizado_en"]
+            )
+        return instance
+
+
+class CambioPasswordSerializer(serializers.Serializer):
+    """Cambio de contraseña verificando siempre la contraseña actual."""
+
+    password_actual = serializers.CharField(
+        write_only=True, trim_whitespace=False
+    )
+    password_nueva = serializers.CharField(
+        write_only=True, trim_whitespace=False
+    )
+
+    def validate_password_actual(self, value):
+        usuario = self.context["usuario"]
+        if not verify_password(value, usuario.password_hash):
+            raise serializers.ValidationError(
+                "La contraseña actual es incorrecta."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs["password_actual"] == attrs["password_nueva"]:
+            raise serializers.ValidationError(
+                {
+                    "password_nueva": [
+                        "La nueva contraseña debe ser distinta de la actual."
+                    ]
+                }
+            )
+
+        try:
+            validate_password(attrs["password_nueva"], self.context["usuario"])
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(
+                {"password_nueva": list(error.messages)}
+            )
+
+        return attrs
+
+    def save(self, **kwargs):
+        usuario = self.context["usuario"]
+        usuario.password_hash = make_password(
+            self.validated_data["password_nueva"]
+        )
+        usuario.actualizado_en = timezone.now()
+        usuario.save(update_fields=["password_hash", "actualizado_en"])
+        return usuario

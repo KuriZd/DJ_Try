@@ -146,7 +146,8 @@ Content-Type: application/json
 ```
 
 La respuesta contiene los tokens `access` y `refresh`, además de los datos del
-usuario.
+usuario. El objeto `usuario` tiene la misma forma que `GET /api/auth/me/`, es
+decir incluye fechas, `roles` y `aspirante`.
 
 ### Usar el access token
 
@@ -181,6 +182,48 @@ Content-Type: application/json
 }
 ```
 
+### Editar el perfil propio
+
+```http
+PATCH /api/auth/me/
+Authorization: Bearer ACCESS_TOKEN
+Content-Type: application/json
+```
+
+```json
+{
+  "nombre_completo": "Nombre Apellido",
+  "telefono": "+52 55 1234 5678"
+}
+```
+
+Ambos campos son opcionales. La respuesta es el usuario actualizado. El correo
+y la cédula profesional son de solo lectura; cambiarlos requiere un flujo de
+verificación o revisión administrativa.
+
+### Cambiar la contraseña
+
+```http
+POST /api/auth/password/
+Authorization: Bearer ACCESS_TOKEN
+Content-Type: application/json
+```
+
+```json
+{
+  "password_actual": "ContraseñaActual",
+  "password_nueva": "ContraseñaNueva",
+  "refresh": "REFRESH_TOKEN"
+}
+```
+
+Responde `204 No Content`. La contraseña nueva pasa por los validadores de
+`AUTH_PASSWORD_VALIDATORS` y se guarda con el hasher por defecto de Django.
+
+Al cambiarla se revocan las sesiones abiertas del usuario. El campo `refresh`
+es opcional: si se envía, esa sesión se conserva para no cerrar la del
+navegador actual; si se omite, se revocan todas.
+
 ## Endpoints
 
 | Método | Ruta | Descripción | Autenticación |
@@ -190,6 +233,9 @@ Content-Type: application/json
 | `POST` | `/api/auth/login/` | Iniciar sesión | No |
 | `POST` | `/api/auth/refresh/` | Renovar access token | No |
 | `POST` | `/api/auth/logout/` | Cerrar sesión | Sí |
+| `GET` | `/api/auth/me/` | Consultar usuario autenticado | Sí |
+| `PATCH` | `/api/auth/me/` | Editar el perfil propio | Sí |
+| `POST` | `/api/auth/password/` | Cambiar la contraseña propia | Sí |
 | `GET` | `/api/aspirantes/` | Listar aspirantes | Sí |
 | `GET` | `/api/aspirantes/{id}/` | Consultar aspirante | Sí |
 | `GET` | `/api/convocatorias/` | Listar convocatorias | Sí |
@@ -198,6 +244,11 @@ Content-Type: application/json
 | `GET` | `/api/vacantes/{id}/` | Consultar vacante | Sí |
 | `GET` | `/api/certificados/` | Listar certificados | Sí |
 | `GET` | `/api/certificados/{id}/` | Consultar certificado | Sí |
+
+La respuesta de `GET /api/auth/me/` incluye el objeto `aspirante` cuando la
+cuenta está relacionada mediante `aspirantes.usuario_id`. Este objeto contiene
+la matrícula, el teléfono, la cédula profesional y el estado del expediente.
+Si la cuenta no tiene un aspirante relacionado, su valor es `null`.
 
 ## Usuario de prueba
 

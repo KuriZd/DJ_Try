@@ -7,10 +7,12 @@ from .views import (
     ConvocatoriaViewSet,
     VacanteViewSet,
     api_root,
+    cambiar_password,
     health_check,
     login,
     logout,
     refresh_token,
+    usuario_actual,
 )
 
 
@@ -28,5 +30,7 @@ urlpatterns = [
     path("auth/login/", login, name="login"),
     path("auth/refresh/", refresh_token, name="refresh"),
     path("auth/logout/", logout, name="logout"),
+    path("auth/me/", usuario_actual, name="usuario-actual"),
+    path("auth/password/", cambiar_password, name="cambiar-password"),
     path("", include(router.urls)),
 ]
