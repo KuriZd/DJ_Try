@@ -19,17 +19,14 @@ from rest_framework.status import (
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Aspirante, Certificado, Convocatoria, Sesion, Vacante
+from core.models import Aspirante, Sesion
 
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
-    CertificadoSerializer,
-    ConvocatoriaSerializer,
     LoginSerializer,
     PerfilUpdateSerializer,
     UsuarioSerializer,
-    VacanteSerializer,
 )
 
 
@@ -42,9 +39,6 @@ def api_root(request):
             "health": reverse("api:health", request=request),
             "usuario_actual": reverse("api:usuario-actual", request=request),
             "aspirantes": reverse("api:aspirante-list", request=request),
-            "convocatorias": reverse("api:convocatoria-list", request=request),
-            "vacantes": reverse("api:vacante-list", request=request),
-            "certificados": reverse("api:certificado-list", request=request),
         }
     )
 
@@ -223,22 +217,3 @@ class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
         .select_related("convocatoria", "perfil_profesional")
         .order_by("id")
     )
-
-
-class ConvocatoriaViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = ConvocatoriaSerializer
-    queryset = Convocatoria.objects.all().order_by("-creado_en", "id")
-
-
-class VacanteViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = VacanteSerializer
-    queryset = Vacante.objects.select_related("convocatoria").order_by(
-        "-creado_en", "id"
-    )
-
-
-class CertificadoViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = CertificadoSerializer
-    queryset = Certificado.objects.select_related(
-        "aspirante", "tipo", "proceso"
-    ).order_by("-creado_en", "id")

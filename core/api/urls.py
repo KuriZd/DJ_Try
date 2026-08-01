@@ -3,9 +3,6 @@ from rest_framework.routers import SimpleRouter
 
 from .views import (
     AspiranteViewSet,
-    CertificadoViewSet,
-    ConvocatoriaViewSet,
-    VacanteViewSet,
     api_root,
     cambiar_password,
     health_check,
@@ -20,9 +17,6 @@ app_name = "api"
 
 router = SimpleRouter()
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
-router.register("convocatorias", ConvocatoriaViewSet, basename="convocatoria")
-router.register("vacantes", VacanteViewSet, basename="vacante")
-router.register("certificados", CertificadoViewSet, basename="certificado")
 
 urlpatterns = [
     path("", api_root, name="root"),

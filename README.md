@@ -1,8 +1,7 @@
 # DJ Try API
 
-Backend REST desarrollado con Django y Django REST Framework. Utiliza
-PostgreSQL para almacenar convocatorias, vacantes, aspirantes, postulaciones,
-certificados y usuarios.
+Backend REST desarrollado con Django y Django REST Framework, enfocado en la
+autenticación, los datos del usuario y la consulta de aspirantes.
 
 ## Tecnologías
 
@@ -238,12 +237,6 @@ navegador actual; si se omite, se revocan todas.
 | `POST` | `/api/auth/password/` | Cambiar la contraseña propia | Sí |
 | `GET` | `/api/aspirantes/` | Listar aspirantes | Sí |
 | `GET` | `/api/aspirantes/{id}/` | Consultar aspirante | Sí |
-| `GET` | `/api/convocatorias/` | Listar convocatorias | Sí |
-| `GET` | `/api/convocatorias/{id}/` | Consultar convocatoria | Sí |
-| `GET` | `/api/vacantes/` | Listar vacantes | Sí |
-| `GET` | `/api/vacantes/{id}/` | Consultar vacante | Sí |
-| `GET` | `/api/certificados/` | Listar certificados | Sí |
-| `GET` | `/api/certificados/{id}/` | Consultar certificado | Sí |
 
 La respuesta de `GET /api/auth/me/` incluye el objeto `aspirante` cuando la
 cuenta está relacionada mediante `aspirantes.usuario_id`. Este objeto contiene

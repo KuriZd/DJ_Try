@@ -7,10 +7,7 @@ from rest_framework import serializers
 
 from core.models import (
     Aspirante,
-    Certificado,
-    Convocatoria,
     PerfilProfesional,
-    Vacante,
     Usuario,
 )
 
@@ -68,84 +65,6 @@ class AspiranteSerializer(serializers.ModelSerializer):
             "registrado_en",
             "actualizado_en",
             "perfil_profesional",
-        )
-
-
-class ConvocatoriaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Convocatoria
-        fields = (
-            "id",
-            "nombre",
-            "descripcion",
-            "estado",
-            "inicia_en",
-            "termina_en",
-            "creado_en",
-            "actualizado_en",
-        )
-
-
-class VacanteSerializer(serializers.ModelSerializer):
-    convocatoria_nombre = serializers.CharField(
-        source="convocatoria.nombre", read_only=True
-    )
-
-    class Meta:
-        model = Vacante
-        fields = (
-            "id",
-            "convocatoria",
-            "convocatoria_nombre",
-            "titulo",
-            "departamento",
-            "descripcion",
-            "modalidad",
-            "jornada",
-            "ciudad",
-            "estado_region",
-            "salario_min",
-            "salario_max",
-            "moneda",
-            "estado",
-            "publicada_en",
-            "cierra_en",
-            "creado_en",
-            "actualizado_en",
-        )
-
-
-class CertificadoSerializer(serializers.ModelSerializer):
-    aspirante_nombre = serializers.CharField(
-        source="aspirante.nombre_completo", read_only=True
-    )
-    tipo_nombre = serializers.CharField(source="tipo.nombre", read_only=True)
-
-    class Meta:
-        model = Certificado
-        fields = (
-            "id",
-            "folio",
-            "codigo_verificacion",
-            "aspirante",
-            "aspirante_nombre",
-            "aspirante_snapshot",
-            "tipo",
-            "tipo_nombre",
-            "proceso",
-            "proceso_nombre",
-            "plantilla_id",
-            "plantilla_version",
-            "estado",
-            "resultado",
-            "periodo_participacion",
-            "tipo_generacion",
-            "autoridad_emisora",
-            "cargo_autoridad",
-            "emitido_en",
-            "enviado_en",
-            "creado_en",
-            "actualizado_en",
         )
 
 
