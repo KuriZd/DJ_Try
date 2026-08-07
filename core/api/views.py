@@ -2,7 +2,7 @@ import hashlib
 import uuid
 from datetime import datetime, timezone as datetime_timezone
 
-from django.db import connection
+from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.status import (
     HTTP_200_OK,
+    HTTP_201_CREATED,
     HTTP_204_NO_CONTENT,
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
@@ -26,7 +27,9 @@ from .serializers import (
     CambioPasswordSerializer,
     LoginSerializer,
     PerfilUpdateSerializer,
+    RegistroSerializer,
     UsuarioSerializer,
+    permisos_de,
 )
 
 
@@ -80,13 +83,11 @@ def token_response(usuario, refresh):
     }
 
 
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def login(request):
-    serializer = LoginSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    usuario = serializer.validated_data["usuario"]
-
+def abrir_sesion(usuario, request):
+    """
+    Emite el par de tokens y registra la sesión. Lo comparten el acceso y el
+    alta de cuenta, que entra autenticada.
+    """
     refresh = RefreshToken.for_user(usuario)
     refresh["email"] = usuario.email
 
@@ -104,7 +105,29 @@ def login(request):
     usuario.ultimo_acceso_en = timezone.now()
     usuario.save(update_fields=["ultimo_acceso_en"])
 
-    return Response(token_response(usuario, refresh), status=HTTP_200_OK)
+    return token_response(usuario, refresh)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def login(request):
+    serializer = LoginSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    usuario = serializer.validated_data["usuario"]
+
+    return Response(abrir_sesion(usuario, request), status=HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@transaction.atomic
+def registro(request):
+    """Da de alta una cuenta con su expediente y la deja autenticada."""
+    serializer = RegistroSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    usuario = serializer.save()
+
+    return Response(abrir_sesion(usuario, request), status=HTTP_201_CREATED)
 
 
 @api_view(["POST"])
@@ -211,9 +234,24 @@ def cambiar_password(request):
 
 
 class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Expedientes de aspirantes.
+
+    Quien tiene `aspirantes:consultar` ve todos; el resto sólo ve el suyo. El
+    filtrado va en el queryset, así que también aplica al detalle: pedir el
+    folio de otra persona responde 404, no 403, para no confirmar que existe.
+    """
+
     serializer_class = AspiranteSerializer
-    queryset = (
-        Aspirante.objects.filter(eliminado_en__isnull=True)
-        .select_related("convocatoria", "perfil_profesional")
-        .order_by("id")
-    )
+
+    def get_queryset(self):
+        base = (
+            Aspirante.objects.filter(eliminado_en__isnull=True)
+            .select_related("convocatoria", "perfil_profesional")
+            .order_by("id")
+        )
+
+        if "aspirantes:consultar" in permisos_de(self.request.user):
+            return base
+
+        return base.filter(usuario=self.request.user)

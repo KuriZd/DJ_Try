@@ -7,10 +7,12 @@ INSERT INTO roles (clave, nombre, descripcion) VALUES
   ('administrador', 'Administrador', 'Acceso completo al sistema'),
   ('reclutador', 'Reclutador', 'Gestiona vacantes, aspirantes y postulaciones'),
   ('certificador', 'Certificador', 'Gestiona la emisión de certificados'),
-  ('consulta', 'Solo consulta', 'Acceso de lectura');
+  ('consulta', 'Solo consulta', 'Acceso de lectura'),
+  ('aspirante', 'Aspirante', 'Consulta su expediente, vacantes y certificados');
 
 INSERT INTO permisos (clave, descripcion) VALUES
   ('usuarios:administrar', 'Administrar usuarios y roles'),
+  ('aspirantes:consultar', 'Consultar el expediente de cualquier aspirante'),
   ('vacantes:consultar', 'Consultar vacantes'),
   ('vacantes:administrar', 'Crear y editar vacantes'),
   ('postulaciones:consultar', 'Consultar postulaciones'),
@@ -33,21 +35,43 @@ INSERT INTO roles_permisos (rol_id, permiso_id)
 SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
 WHERE r.clave = 'consulta'
   AND p.clave IN (
+    'aspirantes:consultar',
     'vacantes:consultar',
     'postulaciones:consultar',
     'certificados:consultar',
     'certificados:historial'
   );
 
+-- El aspirante sólo consulta lo suyo y descarga sus certificados.
 INSERT INTO roles_permisos (rol_id, permiso_id)
 SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
-WHERE r.clave = 'reclutador'
-  AND (p.clave LIKE 'vacantes:%' OR p.clave LIKE 'postulaciones:%');
+WHERE r.clave = 'aspirante'
+  AND p.clave IN (
+    'vacantes:consultar',
+    'postulaciones:consultar',
+    'certificados:consultar',
+    'certificados:descargar'
+  );
 
 INSERT INTO roles_permisos (rol_id, permiso_id)
 SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
-WHERE r.clave = 'certificador' AND p.clave LIKE 'certificados:%'
-  AND p.clave NOT IN ('certificados:revocar', 'certificados:plantillas');
+WHERE r.clave = 'reclutador'
+  AND (
+    p.clave LIKE 'vacantes:%'
+    OR p.clave LIKE 'postulaciones:%'
+    OR p.clave = 'aspirantes:consultar'
+  );
+
+INSERT INTO roles_permisos (rol_id, permiso_id)
+SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
+WHERE r.clave = 'certificador'
+  AND (
+    (
+      p.clave LIKE 'certificados:%'
+      AND p.clave NOT IN ('certificados:revocar', 'certificados:plantillas')
+    )
+    OR p.clave = 'aspirantes:consultar'
+  );
 
 -- Usuario administrador de prueba.
 -- Credenciales locales: kurizd@djtry.local / 0330

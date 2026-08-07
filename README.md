@@ -148,6 +148,31 @@ La respuesta contiene los tokens `access` y `refresh`, además de los datos del
 usuario. El objeto `usuario` tiene la misma forma que `GET /api/auth/me/`, es
 decir incluye fechas, `roles` y `aspirante`.
 
+### Crear una cuenta
+
+```http
+POST /api/auth/registro/
+Content-Type: application/json
+```
+
+```json
+{
+  "nombre_completo": "Nombre Apellido",
+  "email": "nuevo@djtry.local",
+  "password": "ContraseñaSegura"
+}
+```
+
+Responde `201` con la misma forma que el login: `access`, `refresh` y `usuario`,
+de modo que la cuenta queda autenticada sin volver a capturar credenciales.
+
+La cuenta se crea con estado `activo` y se le genera su expediente de aspirante
+con folio y matrícula consecutivos (`ASP-007` / `AM2026-0007`), en estado
+`incompleto` y sin cédula profesional. La contraseña pasa por
+`AUTH_PASSWORD_VALIDATORS`.
+
+El correo debe estar libre tanto en `usuarios` como en `aspirantes`.
+
 ### Usar el access token
 
 ```http
@@ -192,13 +217,20 @@ Content-Type: application/json
 ```json
 {
   "nombre_completo": "Nombre Apellido",
+  "email": "nuevo@djtry.local",
   "telefono": "+52 55 1234 5678"
 }
 ```
 
-Ambos campos son opcionales. La respuesta es el usuario actualizado. El correo
-y la cédula profesional son de solo lectura; cambiarlos requiere un flujo de
-verificación o revisión administrativa.
+Los tres campos son opcionales. La respuesta es el usuario actualizado.
+
+Cambiar el correo limpia `email_verificado_en`, porque la dirección nueva aún
+no está verificada. El correo es además la credencial de acceso: después de
+cambiarlo hay que iniciar sesión con el nuevo.
+
+`nombre_completo`, `email` y `telefono` se replican al expediente del aspirante
+cuando la cuenta tiene uno; `telefono` responde 400 si no lo tiene. La cédula
+profesional sigue siendo de solo lectura.
 
 ### Cambiar la contraseña
 
@@ -230,6 +262,7 @@ navegador actual; si se omite, se revocan todas.
 | `GET` | `/api/` | Raíz de la API | No |
 | `GET` | `/api/health/` | Estado de API y PostgreSQL | No |
 | `POST` | `/api/auth/login/` | Iniciar sesión | No |
+| `POST` | `/api/auth/registro/` | Crear cuenta y expediente | No |
 | `POST` | `/api/auth/refresh/` | Renovar access token | No |
 | `POST` | `/api/auth/logout/` | Cerrar sesión | Sí |
 | `GET` | `/api/auth/me/` | Consultar usuario autenticado | Sí |
@@ -237,6 +270,26 @@ navegador actual; si se omite, se revocan todas.
 | `POST` | `/api/auth/password/` | Cambiar la contraseña propia | Sí |
 | `GET` | `/api/aspirantes/` | Listar aspirantes | Sí |
 | `GET` | `/api/aspirantes/{id}/` | Consultar aspirante | Sí |
+
+## Roles y permisos
+
+`GET /api/auth/me/` (y el login y el registro) devuelven `roles` y `permisos`.
+`permisos` es la unión de los permisos de todos los roles del usuario, listo
+para que el frontend decida qué mostrar.
+
+| Rol | Permisos |
+|---|---|
+| `administrador` | todos |
+| `reclutador` | `aspirantes:consultar`, `vacantes:*`, `postulaciones:*` |
+| `certificador` | `aspirantes:consultar`, `certificados:*` salvo `revocar` y `plantillas` |
+| `consulta` | `aspirantes:consultar`, `vacantes:consultar`, `postulaciones:consultar`, `certificados:consultar`, `certificados:historial` |
+| `aspirante` | `vacantes:consultar`, `postulaciones:consultar`, `certificados:consultar`, `certificados:descargar` |
+
+Las cuentas creadas desde `/auth/registro/` reciben el rol `aspirante`.
+
+`aspirantes:consultar` separa "ver cualquier expediente" de "ver el mío": quien
+no lo tiene sólo obtiene su propio expediente en `/api/aspirantes/`, y pedir el
+folio de otra persona responde `404`.
 
 La respuesta de `GET /api/auth/me/` incluye el objeto `aspirante` cuando la
 cuenta está relacionada mediante `aspirantes.usuario_id`. Este objeto contiene

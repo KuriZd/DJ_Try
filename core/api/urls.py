@@ -9,6 +9,7 @@ from .views import (
     login,
     logout,
     refresh_token,
+    registro,
     usuario_actual,
 )
 
@@ -22,6 +23,7 @@ urlpatterns = [
     path("", api_root, name="root"),
     path("health/", health_check, name="health"),
     path("auth/login/", login, name="login"),
+    path("auth/registro/", registro, name="registro"),
     path("auth/refresh/", refresh_token, name="refresh"),
     path("auth/logout/", logout, name="logout"),
     path("auth/me/", usuario_actual, name="usuario-actual"),

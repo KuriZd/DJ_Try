@@ -1,14 +1,20 @@
+import uuid
+
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from core.models import (
     Aspirante,
+    EstadoExpediente,
+    EstadoUsuario,
     PerfilProfesional,
+    Rol,
     Usuario,
+    UsuarioRol,
 )
 
 
@@ -104,8 +110,136 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
+class RegistroSerializer(serializers.Serializer):
+    """
+    Alta de cuenta desde el frontend público.
+
+    Crea el usuario ya activo y su expediente de aspirante, para que pueda
+    entrar y dar seguimiento a su proceso de inmediato.
+    """
+
+    nombre_completo = serializers.CharField(max_length=180)
+    email = serializers.EmailField(max_length=254)
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    # Reintentos por si dos altas simultáneas calculan el mismo consecutivo.
+    INTENTOS_FOLIO = 3
+
+    # Toda cuenta creada desde el frontend público es de un aspirante.
+    ROL_POR_DEFECTO = "aspirante"
+
+    def validate_nombre_completo(self, value):
+        nombre = value.strip()
+        if not nombre:
+            raise serializers.ValidationError(
+                "El nombre completo es obligatorio."
+            )
+        return nombre
+
+    def validate_email(self, value):
+        email = value.strip()
+
+        if Usuario.objects.filter(
+            email__iexact=email, eliminado_en__isnull=True
+        ).exists():
+            raise serializers.ValidationError(
+                "Ya existe una cuenta con ese correo."
+            )
+
+        # El expediente que se crea abajo comparte el correo y tiene su propio
+        # índice único.
+        if Aspirante.objects.filter(
+            email__iexact=email, eliminado_en__isnull=True
+        ).exists():
+            raise serializers.ValidationError(
+                "Ese correo ya está registrado en un expediente."
+            )
+
+        return email
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(list(error.messages))
+        return value
+
+    def _siguiente_consecutivo(self):
+        """Consecutivo siguiente leyendo la parte numérica de los folios."""
+        folios = Aspirante.objects.filter(id__regex=r"^ASP-\d+$").values_list(
+            "id", flat=True
+        )
+        numeros = [int(folio.split("-")[1]) for folio in folios]
+        return max(numeros, default=0) + 1
+
+    def create(self, validated_data):
+        ahora = timezone.now()
+
+        usuario = Usuario.objects.create(
+            id=uuid.uuid4(),
+            nombre_completo=validated_data["nombre_completo"],
+            email=validated_data["email"],
+            password_hash=make_password(validated_data["password"]),
+            estado=EstadoUsuario.ACTIVO,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+
+        rol = Rol.objects.filter(clave=self.ROL_POR_DEFECTO).first()
+        if rol is None:
+            raise serializers.ValidationError(
+                {
+                    "detail": "Falta el rol 'aspirante' en el catálogo. "
+                    "Aplica las migraciones pendientes."
+                }
+            )
+        UsuarioRol.objects.create(usuario=usuario, rol=rol, asignado_en=ahora)
+
+        for intento in range(self.INTENTOS_FOLIO):
+            consecutivo = self._siguiente_consecutivo()
+            try:
+                # Savepoint: si el folio choca, se deshace sólo este intento.
+                with transaction.atomic():
+                    Aspirante.objects.create(
+                        id=f"ASP-{consecutivo:03d}",
+                        usuario=usuario,
+                        matricula=f"AM{ahora.year}-{consecutivo:04d}",
+                        nombre_completo=usuario.nombre_completo,
+                        email=usuario.email,
+                        estado_expediente=EstadoExpediente.INCOMPLETO,
+                        registrado_en=ahora,
+                        actualizado_en=ahora,
+                    )
+                break
+            except IntegrityError:
+                if intento == self.INTENTOS_FOLIO - 1:
+                    raise serializers.ValidationError(
+                        {
+                            "detail": "No se pudo asignar la matrícula. "
+                            "Intenta de nuevo."
+                        }
+                    )
+
+        return usuario
+
+
+def permisos_de(usuario):
+    """Permisos efectivos del usuario: la unión de los de todos sus roles."""
+    if usuario is None or not usuario.is_authenticated:
+        return set()
+
+    return {
+        rol_permiso.permiso.clave
+        for usuario_rol in usuario.usuarios_roles.select_related("rol")
+        for rol_permiso in usuario_rol.rol.roles_permisos.select_related(
+            "permiso"
+        )
+    }
+
+
 class UsuarioSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
+    permisos = serializers.SerializerMethodField()
     aspirante = serializers.SerializerMethodField()
 
     class Meta:
@@ -120,8 +254,12 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "creado_en",
             "actualizado_en",
             "roles",
+            "permisos",
             "aspirante",
         )
+
+    def get_permisos(self, usuario):
+        return sorted(permisos_de(usuario))
 
     def get_roles(self, usuario):
         return [
@@ -155,9 +293,11 @@ class PerfilUpdateSerializer(serializers.Serializer):
     """Edición de los datos propios del usuario autenticado."""
 
     nombre_completo = serializers.CharField(max_length=180, required=False)
+    email = serializers.EmailField(max_length=254, required=False)
     telefono = serializers.CharField(
         max_length=30, required=False, allow_blank=True, allow_null=True
     )
+    cedula_profesional = serializers.CharField(max_length=30, required=False)
 
     def validate_nombre_completo(self, value):
         nombre = value.strip()
@@ -166,6 +306,77 @@ class PerfilUpdateSerializer(serializers.Serializer):
                 "El nombre completo es obligatorio."
             )
         return nombre
+
+    def validate_email(self, value):
+        email = value.strip()
+
+        # Replica usuarios_email_unico: único sobre lower(email) entre los
+        # usuarios no eliminados.
+        if (
+            Usuario.objects.filter(
+                email__iexact=email, eliminado_en__isnull=True
+            )
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "Ya existe un usuario con ese correo."
+            )
+
+        # El correo se replica al expediente, que tiene su propio índice único.
+        try:
+            aspirante = self.instance.aspirante
+        except Aspirante.DoesNotExist:
+            aspirante = None
+
+        if (
+            aspirante is not None
+            and Aspirante.objects.filter(
+                email__iexact=email, eliminado_en__isnull=True
+            )
+            .exclude(pk=aspirante.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "Ese correo ya está en uso por otro expediente."
+            )
+
+        return email
+
+    def validate_cedula_profesional(self, value):
+        cedula = value.strip()
+        if not cedula:
+            raise serializers.ValidationError(
+                "La cédula profesional es obligatoria."
+            )
+
+        try:
+            aspirante = self.instance.aspirante
+        except Aspirante.DoesNotExist:
+            raise serializers.ValidationError(
+                "El usuario no tiene un aspirante relacionado."
+            )
+
+        # Sólo se puede registrar la primera vez. Corregir una cédula ya
+        # asentada es un cambio de credencial oficial y pasa por revisión.
+        if aspirante.cedula_profesional:
+            raise serializers.ValidationError(
+                "La cédula profesional ya está registrada; su cambio requiere "
+                "revisión administrativa."
+            )
+
+        if (
+            Aspirante.objects.filter(
+                cedula_profesional__iexact=cedula, eliminado_en__isnull=True
+            )
+            .exclude(pk=aspirante.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "Esa cédula profesional ya está registrada en otro expediente."
+            )
+
+        return cedula
 
     @transaction.atomic
     def update(self, instance, validated_data):
@@ -180,19 +391,40 @@ class PerfilUpdateSerializer(serializers.Serializer):
             )
 
         ahora = timezone.now()
+        campos_usuario = []
+        campos_aspirante = []
+
         if "nombre_completo" in validated_data:
             instance.nombre_completo = validated_data["nombre_completo"]
-            instance.actualizado_en = ahora
-            instance.save(update_fields=["nombre_completo", "actualizado_en"])
+            campos_usuario.append("nombre_completo")
             if aspirante is not None:
                 aspirante.nombre_completo = validated_data["nombre_completo"]
+                campos_aspirante.append("nombre_completo")
 
-        campos_aspirante = []
-        if "nombre_completo" in validated_data and aspirante is not None:
-            campos_aspirante.append("nombre_completo")
+        email_nuevo = validated_data.get("email")
+        if email_nuevo and email_nuevo.lower() != instance.email.lower():
+            instance.email = email_nuevo
+            # La dirección nueva todavía no está verificada.
+            instance.email_verificado_en = None
+            campos_usuario.extend(["email", "email_verificado_en"])
+            if aspirante is not None:
+                # El expediente conserva el correo de contacto al que se envían
+                # los certificados; si no se replica, quedaría desactualizado.
+                aspirante.email = email_nuevo
+                campos_aspirante.append("email")
+
         if "telefono" in validated_data:
             aspirante.telefono = validated_data["telefono"]
             campos_aspirante.append("telefono")
+
+        if "cedula_profesional" in validated_data:
+            aspirante.cedula_profesional = validated_data["cedula_profesional"]
+            campos_aspirante.append("cedula_profesional")
+
+        if campos_usuario:
+            instance.actualizado_en = ahora
+            instance.save(update_fields=[*campos_usuario, "actualizado_en"])
+
         if campos_aspirante:
             aspirante.actualizado_en = ahora
             aspirante.save(
