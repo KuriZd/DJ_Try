@@ -276,6 +276,7 @@ class Aspirante(TablaExistente):
     )
     matricula = models.CharField(max_length=40, unique=True)
     nombre_completo = models.CharField(max_length=180)
+    fecha_nacimiento = models.DateField(null=True, blank=True)
     email = models.EmailField(max_length=254)
     telefono = models.CharField(max_length=30, null=True, blank=True)
     cedula_profesional = models.CharField(max_length=30, null=True, blank=True)

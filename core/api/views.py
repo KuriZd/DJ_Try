@@ -278,13 +278,15 @@ class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Postulaciones al proceso de selección.
 
-    Quien tiene `postulaciones:administrar` ve todas; el resto sólo las suyas.
-    Igual que en AspiranteViewSet el filtro va en el queryset, así que también
-    cubre el detalle: pedir la postulación de otra persona responde 404, no
-    403, para no confirmar que existe.
+    Quien tiene `postulaciones:consultar-todas` ve todas; el resto sólo las
+    suyas. Igual que en AspiranteViewSet el filtro va en el queryset, así que
+    también cubre el detalle: pedir la postulación de otra persona responde
+    404, no 403, para no confirmar que existe.
 
-    Ojo con `postulaciones:consultar`: no sirve para decidir el alcance porque
-    el rol aspirante también lo tiene, justamente para ver las suyas.
+    El alcance se decide con `consultar-todas` y no con `administrar` porque
+    son cosas distintas: el rol de sólo consulta lee el proceso completo sin
+    poder tocarlo. `postulaciones:consultar` tampoco sirve para esto, ya que
+    el rol aspirante lo tiene para ver las suyas.
     """
 
     serializer_class = PostulacionSerializer
@@ -301,7 +303,7 @@ class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
             .order_by("-registrada_en", "-id")
         )
 
-        if "postulaciones:administrar" in permisos_de(self.request.user):
+        if "postulaciones:consultar-todas" in permisos_de(self.request.user):
             return base
 
         return base.filter(aspirante__usuario=self.request.user)

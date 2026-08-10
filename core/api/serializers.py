@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
@@ -57,6 +58,7 @@ class AspiranteSerializer(serializers.ModelSerializer):
             "id",
             "matricula",
             "nombre_completo",
+            "fecha_nacimiento",
             "email",
             "telefono",
             "cedula_profesional",
@@ -166,6 +168,7 @@ class RegistroSerializer(serializers.Serializer):
     """
 
     nombre_completo = serializers.CharField(max_length=180)
+    fecha_nacimiento = serializers.DateField(required=False, allow_null=True)
     email = serializers.EmailField(max_length=254)
     password = serializers.CharField(write_only=True, trim_whitespace=False)
 
@@ -182,6 +185,13 @@ class RegistroSerializer(serializers.Serializer):
                 "El nombre completo es obligatorio."
             )
         return nombre
+
+    def validate_fecha_nacimiento(self, value):
+        if value is not None and value > date.today():
+            raise serializers.ValidationError(
+                "La fecha de nacimiento no puede estar en el futuro."
+            )
+        return value
 
     def validate_email(self, value):
         email = value.strip()
@@ -252,6 +262,7 @@ class RegistroSerializer(serializers.Serializer):
                         usuario=usuario,
                         matricula=f"AM{ahora.year}-{consecutivo:04d}",
                         nombre_completo=usuario.nombre_completo,
+                        fecha_nacimiento=validated_data.get("fecha_nacimiento"),
                         email=usuario.email,
                         estado_expediente=EstadoExpediente.INCOMPLETO,
                         registrado_en=ahora,
@@ -330,6 +341,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return {
             "id": aspirante.id,
             "matricula": aspirante.matricula,
+            "fecha_nacimiento": aspirante.fecha_nacimiento,
             "telefono": aspirante.telefono,
             "cedula_profesional": aspirante.cedula_profesional,
             "estado_expediente": aspirante.estado_expediente,
@@ -341,6 +353,7 @@ class PerfilUpdateSerializer(serializers.Serializer):
 
     nombre_completo = serializers.CharField(max_length=180, required=False)
     email = serializers.EmailField(max_length=254, required=False)
+    fecha_nacimiento = serializers.DateField(required=False, allow_null=True)
     telefono = serializers.CharField(
         max_length=30, required=False, allow_blank=True, allow_null=True
     )
@@ -353,6 +366,13 @@ class PerfilUpdateSerializer(serializers.Serializer):
                 "El nombre completo es obligatorio."
             )
         return nombre
+
+    def validate_fecha_nacimiento(self, value):
+        if value is not None and value > date.today():
+            raise serializers.ValidationError(
+                "La fecha de nacimiento no puede estar en el futuro."
+            )
+        return value
 
     def validate_email(self, value):
         email = value.strip()
@@ -432,9 +452,18 @@ class PerfilUpdateSerializer(serializers.Serializer):
         except Aspirante.DoesNotExist:
             aspirante = None
 
-        if "telefono" in validated_data and aspirante is None:
+        campos_expediente = {
+            "fecha_nacimiento",
+            "telefono",
+            "cedula_profesional",
+        }
+        solicitados_sin_expediente = campos_expediente.intersection(validated_data)
+        if solicitados_sin_expediente and aspirante is None:
             raise serializers.ValidationError(
-                {"telefono": "El usuario no tiene un aspirante relacionado."}
+                {
+                    campo: "El usuario no tiene un aspirante relacionado."
+                    for campo in solicitados_sin_expediente
+                }
             )
 
         ahora = timezone.now()
@@ -463,6 +492,10 @@ class PerfilUpdateSerializer(serializers.Serializer):
         if "telefono" in validated_data:
             aspirante.telefono = validated_data["telefono"]
             campos_aspirante.append("telefono")
+
+        if "fecha_nacimiento" in validated_data:
+            aspirante.fecha_nacimiento = validated_data["fecha_nacimiento"]
+            campos_aspirante.append("fecha_nacimiento")
 
         if "cedula_profesional" in validated_data:
             aspirante.cedula_profesional = validated_data["cedula_profesional"]
