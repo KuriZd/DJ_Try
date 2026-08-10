@@ -6,7 +6,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.status import (
@@ -20,13 +20,14 @@ from rest_framework.status import (
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Aspirante, Sesion
+from core.models import Aspirante, Postulacion, Sesion
 
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
     LoginSerializer,
     PerfilUpdateSerializer,
+    PostulacionSerializer,
     RegistroSerializer,
     UsuarioSerializer,
     permisos_de,
@@ -42,6 +43,7 @@ def api_root(request):
             "health": reverse("api:health", request=request),
             "usuario_actual": reverse("api:usuario-actual", request=request),
             "aspirantes": reverse("api:aspirante-list", request=request),
+            "postulaciones": reverse("api:postulacion-list", request=request),
         }
     )
 
@@ -255,3 +257,51 @@ class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
             return base
 
         return base.filter(usuario=self.request.user)
+
+
+class PuedeConsultarPostulaciones(BasePermission):
+    """
+    Puerta del módulo de postulaciones.
+
+    Sin `postulaciones:consultar` no se entra, ni siquiera a lo propio. Hoy eso
+    deja fuera al rol certificador, que no participa en el proceso de
+    selección.
+    """
+
+    message = "No tienes permiso para consultar postulaciones."
+
+    def has_permission(self, request, view):
+        return "postulaciones:consultar" in permisos_de(request.user)
+
+
+class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Postulaciones al proceso de selección.
+
+    Quien tiene `postulaciones:administrar` ve todas; el resto sólo las suyas.
+    Igual que en AspiranteViewSet el filtro va en el queryset, así que también
+    cubre el detalle: pedir la postulación de otra persona responde 404, no
+    403, para no confirmar que existe.
+
+    Ojo con `postulaciones:consultar`: no sirve para decidir el alcance porque
+    el rol aspirante también lo tiene, justamente para ver las suyas.
+    """
+
+    serializer_class = PostulacionSerializer
+    permission_classes = [IsAuthenticated, PuedeConsultarPostulaciones]
+
+    def get_queryset(self):
+        base = (
+            Postulacion.objects.filter(aspirante__eliminado_en__isnull=True)
+            .select_related(
+                "aspirante", "aspirante__perfil_profesional", "vacante"
+            )
+            # Bandeja de reclutamiento: lo más reciente primero. El id desempata
+            # para que la paginación no repita ni se salte registros.
+            .order_by("-registrada_en", "-id")
+        )
+
+        if "postulaciones:administrar" in permisos_de(self.request.user):
+            return base
+
+        return base.filter(aspirante__usuario=self.request.user)

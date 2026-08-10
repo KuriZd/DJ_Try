@@ -12,6 +12,7 @@ from core.models import (
     EstadoExpediente,
     EstadoUsuario,
     PerfilProfesional,
+    Postulacion,
     Rol,
     Usuario,
     UsuarioRol,
@@ -71,6 +72,52 @@ class AspiranteSerializer(serializers.ModelSerializer):
             "registrado_en",
             "actualizado_en",
             "perfil_profesional",
+        )
+
+
+class AspiranteResumenSerializer(serializers.ModelSerializer):
+    """
+    Identidad del aspirante dentro de una postulación.
+
+    Es deliberadamente más corto que AspiranteSerializer: la lista de
+    postulaciones no necesita el expediente completo (dirección, folio,
+    convocatoria), y esos datos no tienen por qué viajar a una pantalla que
+    sólo muestra el proceso de selección.
+    """
+
+    habilidades_tecnicas = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Aspirante
+        fields = ("id", "nombre_completo", "email", "habilidades_tecnicas")
+
+    def get_habilidades_tecnicas(self, aspirante):
+        # El perfil profesional es opcional: un expediente recién creado no lo
+        # tiene todavía. RelatedObjectDoesNotExist hereda de AttributeError,
+        # así que getattr con default cubre ese caso.
+        perfil = getattr(aspirante, "perfil_profesional", None)
+        return perfil.habilidades_tecnicas if perfil else []
+
+
+class PostulacionSerializer(serializers.ModelSerializer):
+    aspirante = AspiranteResumenSerializer(read_only=True)
+    vacante_titulo = serializers.CharField(source="vacante.titulo", read_only=True)
+
+    class Meta:
+        model = Postulacion
+        fields = (
+            "id",
+            "aspirante",
+            "vacante",
+            "vacante_titulo",
+            "estado",
+            "etapa",
+            "progreso",
+            "match_score",
+            "experiencia_meses",
+            "ultimo_empleo",
+            "registrada_en",
+            "ultima_actividad_en",
         )
 
 
