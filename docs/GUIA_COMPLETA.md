@@ -202,6 +202,8 @@ la sesión actual; si se omite, se revocan todas las sesiones.
 | `GET` | `/api/aspirantes/{id}/` | Consultar un aspirante permitido | Sí |
 | `GET` | `/api/postulaciones/` | Listar postulaciones permitidas | Sí |
 | `GET` | `/api/postulaciones/{id}/` | Consultar una postulación permitida | Sí |
+| `GET` | `/api/vacantes/` | Listar vacantes publicadas y vigentes | No |
+| `GET` | `/api/vacantes/{id}/` | Consultar una vacante publicada y vigente | No |
 
 Los endpoints de aspirantes y postulaciones son de solo lectura. Solicitar un
 registro fuera del alcance del usuario responde `404` para no revelar su
