@@ -132,6 +132,7 @@ CREATE TABLE aspirantes (
   usuario_id UUID UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL,
   matricula VARCHAR(40) NOT NULL UNIQUE,
   nombre_completo VARCHAR(180) NOT NULL,
+  fecha_nacimiento DATE,
   email VARCHAR(254) NOT NULL,
   telefono VARCHAR(30),
   cedula_profesional VARCHAR(30),
