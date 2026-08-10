@@ -227,6 +227,7 @@ class Vacante(TablaExistente):
         related_name="vacantes",
     )
     titulo = models.CharField(max_length=180)
+    empresa = models.CharField(max_length=150, null=True, blank=True)
     departamento = models.CharField(max_length=120, null=True, blank=True)
     descripcion = models.TextField(null=True, blank=True)
     modalidad = models.CharField(max_length=20, choices=ModalidadVacante.choices)
@@ -249,6 +250,12 @@ class Vacante(TablaExistente):
     )
     publicada_en = models.DateTimeField(null=True, blank=True)
     cierra_en = models.DateTimeField(null=True, blank=True)
+    contratacion = models.CharField(max_length=150, null=True, blank=True)
+    duracion_min_semanas = models.SmallIntegerField(null=True, blank=True)
+    duracion_max_semanas = models.SmallIntegerField(null=True, blank=True)
+    email_contacto = models.EmailField(max_length=254, null=True, blank=True)
+    etiquetas = models.JSONField(default=list)
+    requisitos = models.JSONField(default=list)
     creado_por = models.ForeignKey(
         Usuario,
         models.SET_NULL,

@@ -4,6 +4,7 @@ from rest_framework.routers import SimpleRouter
 from .views import (
     AspiranteViewSet,
     PostulacionViewSet,
+    VacantePublicaViewSet,
     api_root,
     cambiar_password,
     health_check,
@@ -20,6 +21,7 @@ app_name = "api"
 router = SimpleRouter()
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
+router.register("vacantes", VacantePublicaViewSet, basename="vacante")
 
 urlpatterns = [
     path("", api_root, name="root"),
