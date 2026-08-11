@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from django.test import SimpleTestCase, TestCase
 from django.urls import Resolver404, resolve, reverse
@@ -9,6 +10,7 @@ from core.models import (
     Aspirante,
     EstadoPostulacion,
     EstadoUsuario,
+    EstadoVacante,
     ModalidadVacante,
     PerfilProfesional,
     Postulacion,
@@ -31,6 +33,7 @@ class ApiRoutesTest(SimpleTestCase):
             "api:cambiar-password",
             "api:aspirante-list",
             "api:postulacion-list",
+            "api:vacante-list",
         )
 
         for nombre in nombres:
@@ -40,12 +43,78 @@ class ApiRoutesTest(SimpleTestCase):
     def test_rutas_retiradas(self):
         for ruta in (
             "/api/convocatorias/",
-            "/api/vacantes/",
             "/api/certificados/",
         ):
             with self.subTest(ruta=ruta):
                 with self.assertRaises(Resolver404):
                     resolve(ruta)
+
+
+class VacantePublicaTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        ahora = timezone.now()
+        comunes = {
+            "modalidad": ModalidadVacante.HIBRIDO,
+            "creado_en": ahora,
+            "actualizado_en": ahora,
+        }
+        cls.publicada = Vacante.objects.create(
+            titulo="Vacante pública de prueba",
+            empresa="Ene8",
+            departamento="Consultoría SAP",
+            descripcion="Resumen público",
+            estado=EstadoVacante.PUBLICADA,
+            publicada_en=ahora,
+            contratacion="Por proyecto",
+            duracion_min_semanas=6,
+            duracion_max_semanas=10,
+            email_contacto="recursoshumanos@ene8.com.mx",
+            etiquetas=["SAP CCO"],
+            requisitos=["Experiencia en SAP CCO"],
+            **comunes,
+        )
+        cls.borrador = Vacante.objects.create(
+            titulo="Vacante privada de prueba",
+            estado=EstadoVacante.BORRADOR,
+            **comunes,
+        )
+        cls.vencida = Vacante.objects.create(
+            titulo="Vacante vencida de prueba",
+            estado=EstadoVacante.PUBLICADA,
+            publicada_en=ahora - timedelta(days=2),
+            cierra_en=ahora - timedelta(days=1),
+            **comunes,
+        )
+
+    def test_lista_es_publica_y_filtra_vacantes_no_visibles(self):
+        respuesta = APIClient().get(reverse("api:vacante-list"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        ids = {fila["id"] for fila in respuesta.data}
+        self.assertIn(self.publicada.id, ids)
+        self.assertNotIn(self.borrador.id, ids)
+        self.assertNotIn(self.vencida.id, ids)
+
+    def test_card_tiene_la_forma_esperada(self):
+        respuesta = APIClient().get(
+            reverse("api:vacante-detail", args=[self.publicada.id])
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data["area"], "Consultoría SAP")
+        self.assertEqual(respuesta.data["resumen"], "Resumen público")
+        self.assertEqual(respuesta.data["modalidad"], "Híbrida")
+        self.assertEqual(
+            respuesta.data["duracion_semanas"], {"min": 6, "max": 10}
+        )
+
+    def test_detalle_no_publicado_responde_404(self):
+        respuesta = APIClient().get(
+            reverse("api:vacante-detail", args=[self.borrador.id])
+        )
+
+        self.assertEqual(respuesta.status_code, 404)
 
 
 class PostulacionAccesoTest(TestCase):
