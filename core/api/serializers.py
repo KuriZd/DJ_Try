@@ -17,6 +17,7 @@ from core.models import (
     Rol,
     Usuario,
     UsuarioRol,
+    Vacante,
 )
 
 
@@ -121,6 +122,52 @@ class PostulacionSerializer(serializers.ModelSerializer):
             "registrada_en",
             "ultima_actividad_en",
         )
+
+
+class VacantePublicaSerializer(serializers.ModelSerializer):
+    """Datos públicos que consume la card de vacantes del frontend."""
+
+    area = serializers.CharField(source="departamento", read_only=True)
+    resumen = serializers.CharField(source="descripcion", read_only=True)
+    fecha_publicacion = serializers.SerializerMethodField()
+    modalidad = serializers.SerializerMethodField()
+    duracion_semanas = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Vacante
+        fields = (
+            "id",
+            "titulo",
+            "empresa",
+            "area",
+            "estado",
+            "fecha_publicacion",
+            "resumen",
+            "modalidad",
+            "contratacion",
+            "duracion_semanas",
+            "email_contacto",
+            "etiquetas",
+            "requisitos",
+        )
+
+    def get_fecha_publicacion(self, vacante):
+        if vacante.publicada_en is None:
+            return None
+        return timezone.localdate(vacante.publicada_en).isoformat()
+
+    def get_modalidad(self, vacante):
+        return {
+            "presencial": "Presencial",
+            "remoto": "Remota",
+            "hibrido": "Híbrida",
+        }.get(vacante.modalidad, vacante.modalidad)
+
+    def get_duracion_semanas(self, vacante):
+        return {
+            "min": vacante.duracion_min_semanas,
+            "max": vacante.duracion_max_semanas,
+        }
 
 
 class LoginSerializer(serializers.Serializer):

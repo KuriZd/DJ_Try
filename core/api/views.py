@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone as datetime_timezone
 
 from django.db import connection, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
@@ -20,7 +21,7 @@ from rest_framework.status import (
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Aspirante, Postulacion, Sesion
+from core.models import Aspirante, EstadoVacante, Postulacion, Sesion, Vacante
 
 from .serializers import (
     AspiranteSerializer,
@@ -30,6 +31,7 @@ from .serializers import (
     PostulacionSerializer,
     RegistroSerializer,
     UsuarioSerializer,
+    VacantePublicaSerializer,
     permisos_de,
 )
 
@@ -44,6 +46,7 @@ def api_root(request):
             "usuario_actual": reverse("api:usuario-actual", request=request),
             "aspirantes": reverse("api:aspirante-list", request=request),
             "postulaciones": reverse("api:postulacion-list", request=request),
+            "vacantes": reverse("api:vacante-list", request=request),
         }
     )
 
@@ -257,6 +260,24 @@ class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
             return base
 
         return base.filter(usuario=self.request.user)
+
+
+class VacantePublicaViewSet(viewsets.ReadOnlyModelViewSet):
+    """Vacantes visibles en la sección pública del frontend."""
+
+    serializer_class = VacantePublicaSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        ahora = timezone.now()
+        return (
+            Vacante.objects.filter(
+                estado=EstadoVacante.PUBLICADA,
+                publicada_en__lte=ahora,
+            )
+            .filter(Q(cierra_en__isnull=True) | Q(cierra_en__gt=ahora))
+            .order_by("-publicada_en", "-id")
+        )
 
 
 class PuedeConsultarPostulaciones(BasePermission):

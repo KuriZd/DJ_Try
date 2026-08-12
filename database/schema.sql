@@ -105,6 +105,7 @@ CREATE TABLE vacantes (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   convocatoria_id VARCHAR(30) REFERENCES convocatorias(id) ON DELETE SET NULL,
   titulo VARCHAR(180) NOT NULL,
+  empresa VARCHAR(150),
   departamento VARCHAR(120),
   descripcion TEXT,
   modalidad modalidad_vacante NOT NULL,
@@ -117,15 +118,36 @@ CREATE TABLE vacantes (
   estado estado_vacante NOT NULL DEFAULT 'borrador',
   publicada_en TIMESTAMPTZ,
   cierra_en TIMESTAMPTZ,
+  contratacion VARCHAR(150),
+  duracion_min_semanas SMALLINT,
+  duracion_max_semanas SMALLINT,
+  email_contacto VARCHAR(254),
+  etiquetas JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requisitos JSONB NOT NULL DEFAULT '[]'::jsonb,
   creado_por UUID REFERENCES usuarios(id) ON DELETE SET NULL,
   creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
   actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (salario_min IS NULL OR salario_min >= 0),
   CHECK (salario_max IS NULL OR salario_max >= 0),
-  CHECK (salario_max IS NULL OR salario_min IS NULL OR salario_max >= salario_min)
+  CHECK (salario_max IS NULL OR salario_min IS NULL OR salario_max >= salario_min),
+  CONSTRAINT vacantes_duracion_min_positiva
+    CHECK (duracion_min_semanas IS NULL OR duracion_min_semanas > 0),
+  CONSTRAINT vacantes_duracion_rango_valido CHECK (
+    duracion_max_semanas IS NULL
+    OR duracion_min_semanas IS NULL
+    OR duracion_max_semanas >= duracion_min_semanas
+  ),
+  CONSTRAINT vacantes_etiquetas_array
+    CHECK (jsonb_typeof(etiquetas) = 'array'),
+  CONSTRAINT vacantes_requisitos_array
+    CHECK (jsonb_typeof(requisitos) = 'array')
 );
 
 CREATE INDEX vacantes_busqueda_idx ON vacantes (estado, departamento, modalidad);
+CREATE INDEX vacantes_publicadas_fecha_idx
+  ON vacantes (publicada_en DESC)
+  WHERE estado = 'publicada';
+CREATE INDEX vacantes_etiquetas_idx ON vacantes USING GIN (etiquetas);
 
 CREATE TABLE aspirantes (
   id VARCHAR(30) PRIMARY KEY,

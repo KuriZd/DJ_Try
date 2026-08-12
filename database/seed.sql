@@ -134,6 +134,27 @@ INSERT INTO convocatorias (id, nombre, estado) VALUES
   ('AMIS-2026-02', 'Convocatoria AMIS 2026-02', 'publicada'),
   ('AMIS-2026-03', 'Convocatoria AMIS 2026-03', 'borrador');
 
+INSERT INTO vacantes (
+  titulo, empresa, departamento, descripcion, estado, publicada_en,
+  modalidad, jornada, contratacion, duracion_min_semanas,
+  duracion_max_semanas, email_contacto, etiquetas, requisitos
+) VALUES (
+  'Consultor SAP Customer Checkout (POS SAP)',
+  'Ene8',
+  'Consultoría SAP',
+  'En Ene8 estamos en búsqueda de un Consultor SAP Customer Checkout (POS SAP) para participar en un proyecto de implementación.',
+  'publicada',
+  '2026-08-05T00:00:00-06:00',
+  'hibrido',
+  'tiempo_completo',
+  'Por proyecto / Prestación de servicios / Freelance',
+  6,
+  10,
+  'recursoshumanos@ene8.com.mx',
+  '["SAP CCO", "SAP Business One", "S/4HANA", "SAP ECC", "Punto de Venta"]'::jsonb,
+  '["Experiencia en SAP Customer Checkout (CCO).", "Implementación e integración con SAP Business One, SAP S/4HANA o SAP ECC.", "Conocimiento de procesos de Punto de Venta (POS).", "Configuración de medios de pago, impuestos, promociones, clientes e inventarios.", "Experiencia en pruebas funcionales, capacitación y soporte a usuarios."]'::jsonb
+);
+
 INSERT INTO aspirantes (
   id, matricula, nombre_completo, email, telefono, cedula_profesional,
   puesto_aspirado, folio_aplicacion, estado_expediente, convocatoria_id,
