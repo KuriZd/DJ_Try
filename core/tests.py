@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 
 from core.models import (
     Aspirante,
+    Empresa,
     EstadoPostulacion,
     EstadoUsuario,
     EstadoVacante,
@@ -19,6 +20,41 @@ from core.models import (
     UsuarioRol,
     Vacante,
 )
+
+
+class EmpresaPerfilTest(TestCase):
+    def setUp(self):
+        self.usuario = Usuario.objects.get(email__iexact="KuriZd@empresa.com")
+        self.cliente = APIClient()
+        self.cliente.force_authenticate(user=self.usuario)
+
+    def test_mi_perfil_incluye_la_empresa(self):
+        respuesta = self.cliente.get(reverse("api:usuario-actual"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            respuesta.data["empresa"]["razon_social"],
+            "Empresa Demo, S.A. de C.V.",
+        )
+        self.assertIsNone(respuesta.data["aspirante"])
+
+    def test_la_empresa_actualiza_su_informacion(self):
+        respuesta = self.cliente.patch(
+            reverse("api:usuario-actual"),
+            {
+                "nombre_comercial": "KuriZd Talento",
+                "rfc": "ABC010203AB1",
+                "telefono": "5555551234",
+                "sector": "Tecnología",
+            },
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data["empresa"]["rfc"], "ABC010203AB1")
+        empresa = Empresa.objects.get(usuario=self.usuario)
+        self.assertEqual(empresa.nombre_comercial, "KuriZd Talento")
+        self.assertEqual(empresa.telefono, "5555551234")
 
 
 class ApiRoutesTest(SimpleTestCase):
@@ -34,6 +70,7 @@ class ApiRoutesTest(SimpleTestCase):
             "api:aspirante-list",
             "api:postulacion-list",
             "api:vacante-list",
+            "api:vacante-admin-list",
         )
 
         for nombre in nombres:
@@ -117,6 +154,206 @@ class VacantePublicaTest(TestCase):
         self.assertEqual(respuesta.status_code, 404)
 
 
+class VacanteAdminTest(TestCase):
+    """
+    Alta y edición de vacantes desde el panel interno.
+
+    Los roles y permisos vienen de database/seed.sql, que la migración inicial
+    carga también en la base de pruebas.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        ahora = timezone.now()
+        cls.reclutador = cls._crear_usuario(
+            "rec@ene8.com.mx", "Rita Ruiz", "reclutador", ahora
+        )
+        cls.aspirante = cls._crear_usuario(
+            "asp@ene8.com.mx", "Ana Gómez", "aspirante", ahora
+        )
+        cls.borrador = Vacante.objects.create(
+            titulo="Borrador de prueba",
+            modalidad=ModalidadVacante.HIBRIDO,
+            estado=EstadoVacante.BORRADOR,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+
+    @classmethod
+    def _crear_usuario(cls, email, nombre, rol_clave, ahora):
+        usuario = Usuario.objects.create(
+            id=uuid.uuid4(),
+            nombre_completo=nombre,
+            email=email,
+            password_hash="!",
+            estado=EstadoUsuario.ACTIVO,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+        UsuarioRol.objects.create(
+            usuario=usuario,
+            rol=Rol.objects.get(clave=rol_clave),
+            asignado_en=ahora,
+        )
+        return usuario
+
+    def cliente_de(self, usuario):
+        cliente = APIClient()
+        cliente.force_authenticate(user=usuario)
+        return cliente
+
+    NUEVA = {
+        "titulo": "Consultor SAP Customer Checkout",
+        "departamento": "Consultoría SAP",
+        "modalidad": "hibrido",
+        "contratacion": "Por proyecto",
+        "duracion_min_semanas": 6,
+        "duracion_max_semanas": 10,
+        "email_contacto": "recursoshumanos@ene8.com.mx",
+        "etiquetas": ["SAP CCO"],
+        "requisitos": ["Experiencia en SAP CCO."],
+    }
+
+    def ids_publicos(self):
+        respuesta = APIClient().get(reverse("api:vacante-list"))
+        return {fila["id"] for fila in respuesta.data}
+
+    # --- Puerta del módulo ---------------------------------------------
+
+    def test_sin_sesion_responde_401(self):
+        respuesta = APIClient().post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        )
+
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_el_aspirante_no_puede_publicar(self):
+        respuesta = self.cliente_de(self.aspirante).post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        )
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_el_aspirante_no_ve_el_catalogo_interno(self):
+        respuesta = self.cliente_de(self.aspirante).get(
+            reverse("api:vacante-admin-list")
+        )
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    # --- Alta -----------------------------------------------------------
+
+    def test_el_reclutador_publica_una_vacante(self):
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        self.assertEqual(respuesta.data["estado"], EstadoVacante.PUBLICADA)
+
+    def test_la_vacante_creada_aparece_en_el_listado_publico(self):
+        """
+        Cubre la trampa de `publicada_en`: sin fecharla, la consulta pública la
+        filtraría aunque su estado dijera "publicada".
+        """
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        )
+
+        self.assertIsNotNone(respuesta.data["publicada_en"])
+        self.assertIn(respuesta.data["id"], self.ids_publicos())
+
+    def test_registra_quien_la_creo(self):
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        )
+
+        creada = Vacante.objects.get(pk=respuesta.data["id"])
+        self.assertEqual(creada.creado_por_id, self.reclutador.id)
+
+    def test_puede_guardarse_como_borrador_sin_salir_al_publico(self):
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"),
+            {**self.NUEVA, "estado": "borrador"},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        self.assertIsNone(respuesta.data["publicada_en"])
+        self.assertNotIn(respuesta.data["id"], self.ids_publicos())
+
+    def test_rechaza_una_duracion_maxima_menor_que_la_minima(self):
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"),
+            {**self.NUEVA, "duracion_min_semanas": 10, "duracion_max_semanas": 6},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("duracion_max_semanas", respuesta.data)
+
+    def test_acepta_una_vacante_sin_duracion(self):
+        sin_duracion = {
+            campo: valor
+            for campo, valor in self.NUEVA.items()
+            if not campo.startswith("duracion_")
+        }
+
+        respuesta = self.cliente_de(self.reclutador).post(
+            reverse("api:vacante-admin-list"), sin_duracion, format="json"
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        self.assertIsNone(respuesta.data["duracion_min_semanas"])
+
+    # --- Catálogo interno y edición -------------------------------------
+
+    def test_el_catalogo_interno_incluye_los_borradores(self):
+        respuesta = self.cliente_de(self.reclutador).get(
+            reverse("api:vacante-admin-list")
+        )
+
+        ids = {fila["id"] for fila in respuesta.data}
+        self.assertIn(self.borrador.id, ids)
+        self.assertNotIn(self.borrador.id, self.ids_publicos())
+
+    def test_publicar_un_borrador_lo_fecha_y_lo_saca_al_publico(self):
+        respuesta = self.cliente_de(self.reclutador).patch(
+            reverse("api:vacante-admin-detail", args=[self.borrador.id]),
+            {"estado": "publicada"},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIsNotNone(respuesta.data["publicada_en"])
+        self.assertIn(self.borrador.id, self.ids_publicos())
+
+    def test_cerrar_una_vacante_la_retira_del_publico(self):
+        cliente = self.cliente_de(self.reclutador)
+        creada = cliente.post(
+            reverse("api:vacante-admin-list"), self.NUEVA, format="json"
+        ).data
+
+        cliente.patch(
+            reverse("api:vacante-admin-detail", args=[creada["id"]]),
+            {"estado": "cerrada"},
+            format="json",
+        )
+
+        self.assertNotIn(creada["id"], self.ids_publicos())
+
+    def test_no_expone_el_borrado(self):
+        """
+        `postulaciones.vacante_id` es PROTECT: retirar una vacante es cerrarla,
+        no borrarla.
+        """
+        respuesta = self.cliente_de(self.reclutador).delete(
+            reverse("api:vacante-admin-detail", args=[self.borrador.id])
+        )
+
+        self.assertEqual(respuesta.status_code, 405)
+
+
 class PostulacionAccesoTest(TestCase):
     """
     Matriz de acceso de /api/postulaciones/.
@@ -169,8 +406,8 @@ class PostulacionAccesoTest(TestCase):
         cls.administrador = cls._crear_usuario(
             "admin@ene8.com.mx", "Ada Admin", "administrador", ahora
         )
-        cls.certificador = cls._crear_usuario(
-            "cert@ene8.com.mx", "Ceci Cert", "certificador", ahora
+        cls.empresa = cls._crear_usuario(
+            "empresa@ene8.com.mx", "Empresa Demo", "empresa", ahora
         )
         cls.solo_consulta = cls._crear_usuario(
             "consulta@ene8.com.mx", "Coni Consulta", "consulta", ahora
@@ -309,13 +546,14 @@ class PostulacionAccesoTest(TestCase):
 
     # --- Puerta del módulo ---------------------------------------------
 
-    def test_certificador_no_entra_al_modulo(self):
-        """No tiene ningún permiso `postulaciones:*`."""
-        respuesta = self.cliente_de(self.certificador).get(
+    def test_empresa_ve_todas_las_postulaciones(self):
+        """Temporalmente Empresa comparte los permisos del administrador."""
+        respuesta = self.cliente_de(self.empresa).get(
             reverse("api:postulacion-list")
         )
 
-        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(len(respuesta.data), 2)
 
     def test_sin_sesion_responde_401(self):
         respuesta = APIClient().get(reverse("api:postulacion-list"))

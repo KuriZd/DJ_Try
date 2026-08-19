@@ -64,6 +64,31 @@ CREATE TABLE usuarios_roles (
   PRIMARY KEY (usuario_id, rol_id)
 );
 
+CREATE TABLE empresas (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  usuario_id UUID NOT NULL UNIQUE REFERENCES usuarios(id) ON DELETE CASCADE,
+  razon_social VARCHAR(180) NOT NULL,
+  nombre_comercial VARCHAR(180),
+  rfc VARCHAR(13),
+  email_contacto VARCHAR(254),
+  telefono VARCHAR(30),
+  sitio_web VARCHAR(255),
+  sector VARCHAR(120),
+  descripcion TEXT,
+  direccion TEXT,
+  ciudad VARCHAR(120),
+  estado_region VARCHAR(120),
+  codigo_postal VARCHAR(12),
+  logo_url TEXT,
+  registrado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  eliminado_en TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX empresas_rfc_unico
+  ON empresas (lower(rfc))
+  WHERE rfc IS NOT NULL AND eliminado_en IS NULL;
+
 -- Se guarda únicamente el hash del token, nunca el token en claro.
 CREATE TABLE sesiones (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

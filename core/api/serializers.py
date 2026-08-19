@@ -10,8 +10,10 @@ from rest_framework import serializers
 
 from core.models import (
     Aspirante,
+    Empresa,
     EstadoExpediente,
     EstadoUsuario,
+    EstadoVacante,
     PerfilProfesional,
     Postulacion,
     Rol,
@@ -168,6 +170,112 @@ class VacantePublicaSerializer(serializers.ModelSerializer):
             "min": vacante.duracion_min_semanas,
             "max": vacante.duracion_max_semanas,
         }
+
+
+class VacanteAdminSerializer(serializers.ModelSerializer):
+    """
+    Alta y edición de vacantes desde el panel interno.
+
+    A diferencia de VacantePublicaSerializer expone los campos crudos del
+    modelo —`departamento`, `descripcion`, el enum de modalidad— porque aquí
+    se escribe, no se presenta.
+    """
+
+    class Meta:
+        model = Vacante
+        fields = (
+            "id",
+            "titulo",
+            "empresa",
+            "departamento",
+            "descripcion",
+            "modalidad",
+            "jornada",
+            "ciudad",
+            "estado_region",
+            "contratacion",
+            "duracion_min_semanas",
+            "duracion_max_semanas",
+            "email_contacto",
+            "etiquetas",
+            "requisitos",
+            "estado",
+            "publicada_en",
+            "cierra_en",
+            "creado_en",
+            "actualizado_en",
+        )
+        read_only_fields = ("id", "creado_en", "actualizado_en")
+
+    def _valor(self, attrs, campo):
+        if campo in attrs:
+            return attrs[campo]
+        return getattr(self.instance, campo, None)
+
+    def validate(self, attrs):
+        minimo = self._valor(attrs, "duracion_min_semanas")
+        maximo = self._valor(attrs, "duracion_max_semanas")
+
+        if minimo is not None and maximo is not None and minimo > maximo:
+            raise serializers.ValidationError(
+                {
+                    "duracion_max_semanas": (
+                        "La duración máxima no puede ser menor que la mínima."
+                    )
+                }
+            )
+
+        for campo in ("duracion_min_semanas", "duracion_max_semanas"):
+            valor = attrs.get(campo)
+            if valor is not None and valor < 1:
+                raise serializers.ValidationError(
+                    {campo: "La duración se cuenta en semanas completas."}
+                )
+
+        return attrs
+
+    def create(self, validated_data):
+        ahora = timezone.now()
+
+        # El panel llama a esto "Publicar vacante": si no se pide otra cosa,
+        # nace publicada en vez de quedarse en un borrador invisible.
+        validated_data.setdefault("estado", EstadoVacante.PUBLICADA)
+        validated_data.setdefault(
+            "publicada_en", self._fecha_de_publicacion(validated_data, ahora)
+        )
+
+        # Las columnas traen DEFAULT now() en el schema, pero Django las manda
+        # en el INSERT: sin valor explícito viajarían como NULL.
+        validated_data["creado_en"] = ahora
+        validated_data["actualizado_en"] = ahora
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        ahora = timezone.now()
+
+        # Al publicar un borrador hay que fechar la publicación, o el listado
+        # público lo seguiría filtrando pese al estado.
+        if (
+            validated_data.get("estado") == EstadoVacante.PUBLICADA
+            and instance.publicada_en is None
+            and not validated_data.get("publicada_en")
+        ):
+            validated_data["publicada_en"] = ahora
+
+        validated_data["actualizado_en"] = ahora
+
+        return super().update(instance, validated_data)
+
+    @staticmethod
+    def _fecha_de_publicacion(validated_data, ahora):
+        """
+        Sin `publicada_en` la consulta pública descarta la vacante, porque pide
+        `publicada_en <= ahora`. Sólo se fecha lo que nace publicado.
+        """
+        if validated_data.get("estado") != EstadoVacante.PUBLICADA:
+            return None
+        return ahora
 
 
 class LoginSerializer(serializers.Serializer):
@@ -346,6 +454,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
     permisos = serializers.SerializerMethodField()
     aspirante = serializers.SerializerMethodField()
+    empresa = serializers.SerializerMethodField()
 
     class Meta:
         model = Usuario
@@ -361,6 +470,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "roles",
             "permisos",
             "aspirante",
+            "empresa",
         )
 
     def get_permisos(self, usuario):
@@ -394,6 +504,34 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "estado_expediente": aspirante.estado_expediente,
         }
 
+    def get_empresa(self, usuario):
+        try:
+            empresa = usuario.empresa
+        except Empresa.DoesNotExist:
+            return None
+
+        if empresa.eliminado_en is not None:
+            return None
+
+        return {
+            "id": empresa.id,
+            "razon_social": empresa.razon_social,
+            "nombre_comercial": empresa.nombre_comercial,
+            "rfc": empresa.rfc,
+            "email_contacto": empresa.email_contacto,
+            "telefono": empresa.telefono,
+            "sitio_web": empresa.sitio_web,
+            "sector": empresa.sector,
+            "descripcion": empresa.descripcion,
+            "direccion": empresa.direccion,
+            "ciudad": empresa.ciudad,
+            "estado_region": empresa.estado_region,
+            "codigo_postal": empresa.codigo_postal,
+            "logo_url": empresa.logo_url,
+            "registrado_en": empresa.registrado_en,
+            "actualizado_en": empresa.actualizado_en,
+        }
+
 
 class PerfilUpdateSerializer(serializers.Serializer):
     """Edición de los datos propios del usuario autenticado."""
@@ -405,6 +543,40 @@ class PerfilUpdateSerializer(serializers.Serializer):
         max_length=30, required=False, allow_blank=True, allow_null=True
     )
     cedula_profesional = serializers.CharField(max_length=30, required=False)
+    razon_social = serializers.CharField(max_length=180, required=False)
+    nombre_comercial = serializers.CharField(
+        max_length=180, required=False, allow_blank=True, allow_null=True
+    )
+    rfc = serializers.CharField(
+        max_length=13, required=False, allow_blank=True, allow_null=True
+    )
+    email_contacto = serializers.EmailField(
+        max_length=254, required=False, allow_blank=True, allow_null=True
+    )
+    sitio_web = serializers.URLField(
+        max_length=255, required=False, allow_blank=True, allow_null=True
+    )
+    sector = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, allow_null=True
+    )
+    descripcion = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
+    direccion = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
+    ciudad = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, allow_null=True
+    )
+    estado_region = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, allow_null=True
+    )
+    codigo_postal = serializers.CharField(
+        max_length=12, required=False, allow_blank=True, allow_null=True
+    )
+    logo_url = serializers.URLField(
+        required=False, allow_blank=True, allow_null=True
+    )
 
     def validate_nombre_completo(self, value):
         nombre = value.strip()
@@ -492,6 +664,30 @@ class PerfilUpdateSerializer(serializers.Serializer):
 
         return cedula
 
+    def validate_razon_social(self, value):
+        razon_social = value.strip()
+        if not razon_social:
+            raise serializers.ValidationError("La razón social es obligatoria.")
+        return razon_social
+
+    def validate_rfc(self, value):
+        if not value:
+            return value
+        rfc = value.strip().upper()
+        try:
+            empresa = self.instance.empresa
+        except Empresa.DoesNotExist:
+            empresa = None
+        if (
+            Empresa.objects.filter(rfc__iexact=rfc, eliminado_en__isnull=True)
+            .exclude(pk=empresa.pk if empresa else None)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "Ese RFC ya está registrado por otra empresa."
+            )
+        return rfc
+
     @transaction.atomic
     def update(self, instance, validated_data):
         try:
@@ -499,12 +695,19 @@ class PerfilUpdateSerializer(serializers.Serializer):
         except Aspirante.DoesNotExist:
             aspirante = None
 
+        try:
+            empresa = instance.empresa
+        except Empresa.DoesNotExist:
+            empresa = None
+
         campos_expediente = {
             "fecha_nacimiento",
             "telefono",
             "cedula_profesional",
         }
-        solicitados_sin_expediente = campos_expediente.intersection(validated_data)
+        solicitados_sin_expediente = (
+            campos_expediente.intersection(validated_data) - {"telefono"}
+        )
         if solicitados_sin_expediente and aspirante is None:
             raise serializers.ValidationError(
                 {
@@ -513,9 +716,35 @@ class PerfilUpdateSerializer(serializers.Serializer):
                 }
             )
 
+        campos_empresa_editables = {
+            "razon_social",
+            "nombre_comercial",
+            "rfc",
+            "email_contacto",
+            "sitio_web",
+            "sector",
+            "descripcion",
+            "direccion",
+            "ciudad",
+            "estado_region",
+            "codigo_postal",
+            "logo_url",
+        }
+        solicitados_sin_empresa = campos_empresa_editables.intersection(
+            validated_data
+        )
+        if solicitados_sin_empresa and empresa is None:
+            raise serializers.ValidationError(
+                {
+                    campo: "El usuario no tiene una empresa relacionada."
+                    for campo in solicitados_sin_empresa
+                }
+            )
+
         ahora = timezone.now()
         campos_usuario = []
         campos_aspirante = []
+        campos_empresa = []
 
         if "nombre_completo" in validated_data:
             instance.nombre_completo = validated_data["nombre_completo"]
@@ -537,8 +766,16 @@ class PerfilUpdateSerializer(serializers.Serializer):
                 campos_aspirante.append("email")
 
         if "telefono" in validated_data:
-            aspirante.telefono = validated_data["telefono"]
-            campos_aspirante.append("telefono")
+            if aspirante is not None:
+                aspirante.telefono = validated_data["telefono"]
+                campos_aspirante.append("telefono")
+            elif empresa is not None:
+                empresa.telefono = validated_data["telefono"]
+                campos_empresa.append("telefono")
+            else:
+                raise serializers.ValidationError(
+                    {"telefono": "El usuario no tiene un perfil relacionado."}
+                )
 
         if "fecha_nacimiento" in validated_data:
             aspirante.fecha_nacimiento = validated_data["fecha_nacimiento"]
@@ -547,6 +784,10 @@ class PerfilUpdateSerializer(serializers.Serializer):
         if "cedula_profesional" in validated_data:
             aspirante.cedula_profesional = validated_data["cedula_profesional"]
             campos_aspirante.append("cedula_profesional")
+
+        for campo in campos_empresa_editables.intersection(validated_data):
+            setattr(empresa, campo, validated_data[campo])
+            campos_empresa.append(campo)
 
         if campos_usuario:
             instance.actualizado_en = ahora
@@ -557,6 +798,9 @@ class PerfilUpdateSerializer(serializers.Serializer):
             aspirante.save(
                 update_fields=[*campos_aspirante, "actualizado_en"]
             )
+        if campos_empresa:
+            empresa.actualizado_en = ahora
+            empresa.save(update_fields=[*campos_empresa, "actualizado_en"])
         return instance
 
 

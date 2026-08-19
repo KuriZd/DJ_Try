@@ -6,7 +6,7 @@ BEGIN;
 INSERT INTO roles (clave, nombre, descripcion) VALUES
   ('administrador', 'Administrador', 'Acceso completo al sistema'),
   ('reclutador', 'Reclutador', 'Gestiona vacantes, aspirantes y postulaciones'),
-  ('certificador', 'Certificador', 'Gestiona la emisión de certificados'),
+  ('empresa', 'Empresa', 'Gestiona la emisión de certificados'),
   ('consulta', 'Solo consulta', 'Acceso de lectura'),
   ('aspirante', 'Aspirante', 'Consulta su expediente, vacantes y certificados');
 
@@ -64,14 +64,7 @@ WHERE r.clave = 'reclutador'
 
 INSERT INTO roles_permisos (rol_id, permiso_id)
 SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
-WHERE r.clave = 'certificador'
-  AND (
-    (
-      p.clave LIKE 'certificados:%'
-      AND p.clave NOT IN ('certificados:revocar', 'certificados:plantillas')
-    )
-    OR p.clave = 'aspirantes:consultar'
-  );
+WHERE r.clave = 'empresa';
 
 -- Usuario administrador de prueba.
 -- Credenciales locales: kurizd@djtry.local / 0330
@@ -91,6 +84,37 @@ INSERT INTO usuarios_roles (usuario_id, rol_id)
 SELECT '7a15fc4f-d972-48f7-b3d4-4d5f1b877dab', id
 FROM roles
 WHERE clave = 'administrador';
+
+-- Usuarios de demostración, uno por rol. Contraseña para entorno local: 1234.
+INSERT INTO usuarios (
+  id, nombre_completo, email, password_hash, estado, email_verificado_en
+) VALUES
+  ('b0fd0e98-6ed3-418c-8f0a-872eabc240a0', 'KuriZd Administrador', 'KuriZd@administrador.com', 'pbkdf2_sha256$600000$p6BtgfsiXTUC$q93qU84TWURm0l59XsRPVRhV6x0XcDTlMnPGt861wnY=', 'activo', now()),
+  ('68af39e3-ebf9-49a2-90d7-1f925180909f', 'KuriZd Reclutador', 'KuriZd@reclutador.com', 'pbkdf2_sha256$600000$QpfkXs9oOpp2$XIbPiM6zQv7DQDZVJYGw9aLovhOduwwz/mIh9HgF+HA=', 'activo', now()),
+  ('3910bf18-4dce-4d9b-930a-70a58f8e5008', 'KuriZd Empresa', 'KuriZd@empresa.com', 'pbkdf2_sha256$600000$JJKomP0E9S6u$XGFPsbnHOxQvkg9V3/QqK7NE0JBf++d455Znv+6bbRc=', 'activo', now()),
+  ('4f744939-bb96-43ec-8d22-79c09d9672a4', 'KuriZd Consulta', 'KuriZd@consulta.com', 'pbkdf2_sha256$600000$6wkG3dhQoos2$UkfVpMM0Fe0EzrOJOW8/jTL/HkudVJgJa3LF4MxLTUE=', 'activo', now()),
+  ('a206bb8a-eb96-4d23-9807-e234c030ba84', 'KuriZd Aspirante', 'KuriZd@aspirante.com', 'pbkdf2_sha256$600000$kdbmcYOAfWni$ej6FDIzlXAq2KYrFv4P8OpS5bQcrkb0p9NkYMRZIBEk=', 'activo', now());
+
+INSERT INTO usuarios_roles (usuario_id, rol_id)
+SELECT u.id, r.id
+FROM usuarios u
+JOIN roles r ON r.clave = split_part(split_part(lower(u.email), '@', 2), '.', 1)
+WHERE lower(u.email) IN (
+  'kurizd@administrador.com',
+  'kurizd@reclutador.com',
+  'kurizd@empresa.com',
+  'kurizd@consulta.com',
+  'kurizd@aspirante.com'
+);
+
+INSERT INTO empresas (
+  usuario_id, razon_social, nombre_comercial, email_contacto
+)
+SELECT
+  id, 'Empresa Demo, S.A. de C.V.', 'Empresa Demo', email
+FROM usuarios
+WHERE lower(email) = 'kurizd@empresa.com'
+ON CONFLICT (usuario_id) DO NOTHING;
 
 INSERT INTO catalogo_requisitos (clave, nombre) VALUES
   ('identificacion', 'Identificación oficial'),

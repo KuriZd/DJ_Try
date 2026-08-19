@@ -157,6 +157,35 @@ class UsuarioRol(TablaExistente):
         db_table = "usuarios_roles"
 
 
+class Empresa(TablaExistente):
+    id = models.BigAutoField(primary_key=True)
+    usuario = models.OneToOneField(
+        Usuario,
+        models.CASCADE,
+        db_column="usuario_id",
+        related_name="empresa",
+    )
+    razon_social = models.CharField(max_length=180)
+    nombre_comercial = models.CharField(max_length=180, null=True, blank=True)
+    rfc = models.CharField(max_length=13, null=True, blank=True)
+    email_contacto = models.EmailField(max_length=254, null=True, blank=True)
+    telefono = models.CharField(max_length=30, null=True, blank=True)
+    sitio_web = models.URLField(max_length=255, null=True, blank=True)
+    sector = models.CharField(max_length=120, null=True, blank=True)
+    descripcion = models.TextField(null=True, blank=True)
+    direccion = models.TextField(null=True, blank=True)
+    ciudad = models.CharField(max_length=120, null=True, blank=True)
+    estado_region = models.CharField(max_length=120, null=True, blank=True)
+    codigo_postal = models.CharField(max_length=12, null=True, blank=True)
+    logo_url = models.URLField(null=True, blank=True)
+    registrado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+    eliminado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TablaExistente.Meta):
+        db_table = "empresas"
+
+
 class Sesion(TablaExistente):
     id = models.UUIDField(primary_key=True)
     usuario = models.ForeignKey(

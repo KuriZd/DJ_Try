@@ -31,6 +31,7 @@ from .serializers import (
     PostulacionSerializer,
     RegistroSerializer,
     UsuarioSerializer,
+    VacanteAdminSerializer,
     VacantePublicaSerializer,
     permisos_de,
 )
@@ -280,13 +281,43 @@ class VacantePublicaViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
 
+class PuedeAdministrarVacantes(BasePermission):
+    """Alta y edición de vacantes: administrador y reclutador."""
+
+    message = "No tienes permiso para administrar vacantes."
+
+    def has_permission(self, request, view):
+        return "vacantes:administrar" in permisos_de(request.user)
+
+
+class VacanteAdminViewSet(viewsets.ModelViewSet):
+    """
+    Gestión de vacantes para el equipo interno.
+
+    Va aparte de VacantePublicaViewSet a propósito: aquél es de sólo lectura y
+    abierto, y conviene que siga siéndolo en vez de mezclar escrituras tras un
+    permiso. Aquí se ve el catálogo completo —borradores y cerradas incluidas—,
+    que es lo que hace falta para administrarlo.
+
+    No se expone DELETE: `postulaciones.vacante_id` es PROTECT, así que borrar
+    una vacante con postulaciones fallaría, y borrarla sin ellas perdería el
+    historial. Retirar una vacante es pasarla a `cerrada`.
+    """
+
+    serializer_class = VacanteAdminSerializer
+    permission_classes = [IsAuthenticated, PuedeAdministrarVacantes]
+    queryset = Vacante.objects.all().order_by("-creado_en", "-id")
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
+
+    def perform_create(self, serializer):
+        serializer.save(creado_por=self.request.user)
+
+
 class PuedeConsultarPostulaciones(BasePermission):
     """
     Puerta del módulo de postulaciones.
 
-    Sin `postulaciones:consultar` no se entra, ni siquiera a lo propio. Hoy eso
-    deja fuera al rol certificador, que no participa en el proceso de
-    selección.
+    Sin `postulaciones:consultar` no se entra, ni siquiera a lo propio.
     """
 
     message = "No tienes permiso para consultar postulaciones."

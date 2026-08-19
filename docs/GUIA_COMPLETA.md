@@ -218,7 +218,7 @@ existencia.
 |---|---|
 | `administrador` | Todos los permisos |
 | `reclutador` | Aspirantes, vacantes y postulaciones completas |
-| `certificador` | Aspirantes y certificados autorizados |
+| `empresa` | Todos los permisos (temporalmente igual que administrador) |
 | `consulta` | Lectura general sin administración |
 | `aspirante` | Su expediente, sus postulaciones y sus certificados |
 
@@ -234,6 +234,7 @@ su propio expediente.
 | Grupo | Tabla principal | Datos |
 |---|---|---|
 | Cuenta | `usuarios` | Nombre, correo, estado y acceso |
+| Empresa | `empresas` | Razón social, RFC, contacto, sector, ubicación y presencia web |
 | Expediente | `aspirantes` | Fecha de nacimiento, teléfono, matrícula, cédula y puesto aspirado |
 | Perfil | `perfiles_profesionales` | Estudios, experiencia, habilidades y evaluaciones |
 | Aplicación | `postulaciones` | Vacante, etapa, progreso y compatibilidad |
