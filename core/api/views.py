@@ -2,11 +2,12 @@ import hashlib
 import uuid
 from datetime import datetime, timezone as datetime_timezone
 
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -28,6 +29,7 @@ from .serializers import (
     CambioPasswordSerializer,
     LoginSerializer,
     PerfilUpdateSerializer,
+    PostulacionCrearSerializer,
     PostulacionSerializer,
     RegistroSerializer,
     UsuarioSerializer,
@@ -326,7 +328,46 @@ class PuedeConsultarPostulaciones(BasePermission):
         return "postulaciones:consultar" in permisos_de(request.user)
 
 
-class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
+def expediente_de(request):
+    """
+    Expediente de aspirante ligado a la cuenta, o None si no tiene.
+
+    Se memoiza en la request porque el flujo de alta lo consulta dos veces: al
+    revisar el permiso y al armar el contexto del serializer.
+    """
+    if not hasattr(request, "_expediente_aspirante"):
+        request._expediente_aspirante = (
+            Aspirante.objects.filter(
+                usuario=request.user, eliminado_en__isnull=True
+            )
+            .select_related("perfil_profesional")
+            .first()
+        )
+    return request._expediente_aspirante
+
+
+class PuedePostularse(BasePermission):
+    """
+    Alta de postulaciones: sólo quien tiene expediente de aspirante.
+
+    Se decide por identidad y no por permiso. `postulaciones:administrar` no
+    sirve —lo tienen reclutador y administrador, que no se postulan— y
+    `postulaciones:consultar` tampoco alcanza, porque el rol de sólo consulta
+    lee el proceso completo y no debería poder escribir en él.
+
+    Quien se registra desde el frontend público sí queda con expediente
+    (RegistroSerializer lo crea), que es justo el público de la bolsa.
+    """
+
+    message = "Necesitas un expediente de aspirante para postularte."
+
+    def has_permission(self, request, view):
+        if request.method != "POST":
+            return True
+        return expediente_de(request) is not None
+
+
+class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     """
     Postulaciones al proceso de selección.
 
@@ -342,7 +383,11 @@ class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     serializer_class = PostulacionSerializer
-    permission_classes = [IsAuthenticated, PuedeConsultarPostulaciones]
+    permission_classes = [
+        IsAuthenticated,
+        PuedeConsultarPostulaciones,
+        PuedePostularse,
+    ]
 
     def get_queryset(self):
         base = (
@@ -359,3 +404,38 @@ class PostulacionViewSet(viewsets.ReadOnlyModelViewSet):
             return base
 
         return base.filter(aspirante__usuario=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return PostulacionCrearSerializer
+        return PostulacionSerializer
+
+    def get_serializer_context(self):
+        contexto = super().get_serializer_context()
+        if self.action == "create":
+            contexto["expediente"] = expediente_de(self.request)
+        return contexto
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            # El atomic acota el fallo: sin él, un IntegrityError dentro de una
+            # transacción abierta la deja rota y la respuesta de error tampoco
+            # podría escribirse.
+            with transaction.atomic():
+                postulacion = serializer.save()
+        except IntegrityError:
+            # Dos envíos simultáneos pasan la validación a la vez y sólo uno
+            # gana el índice único. El segundo es un 400, no un 500.
+            raise ValidationError(
+                {"vacante": "Ya te postulaste a esta vacante."}
+            )
+
+        # Se responde con la forma de lectura para que el frontend reciba la
+        # postulación tal como la verá después en el listado.
+        salida = PostulacionSerializer(
+            postulacion, context=self.get_serializer_context()
+        )
+        return Response(salida.data, status=HTTP_201_CREATED)

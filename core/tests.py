@@ -354,7 +354,61 @@ class VacanteAdminTest(TestCase):
         self.assertEqual(respuesta.status_code, 405)
 
 
-class PostulacionAccesoTest(TestCase):
+class UsuariosDePruebaMixin:
+    """
+    Altas mínimas de usuario y expediente para los tests de postulaciones.
+
+    Los roles y permisos ya vienen de database/seed.sql, que la migración
+    inicial carga también en la base de pruebas, así que aquí sólo se asignan.
+    """
+
+    @classmethod
+    def _crear_usuario(cls, email, nombre, rol_clave, ahora):
+        usuario = Usuario.objects.create(
+            id=uuid.uuid4(),
+            nombre_completo=nombre,
+            email=email,
+            password_hash="!",
+            estado=EstadoUsuario.ACTIVO,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+        UsuarioRol.objects.create(
+            usuario=usuario,
+            rol=Rol.objects.get(clave=rol_clave),
+            asignado_en=ahora,
+        )
+        return usuario
+
+    @classmethod
+    def _crear_aspirante(
+        cls, email, aspirante_id, nombre, rol_clave, ahora, experiencia_meses=None
+    ):
+        usuario = cls._crear_usuario(email, nombre, rol_clave, ahora)
+        aspirante = Aspirante.objects.create(
+            id=aspirante_id,
+            usuario=usuario,
+            matricula=aspirante_id,
+            nombre_completo=nombre,
+            email=email,
+            registrado_en=ahora,
+            actualizado_en=ahora,
+        )
+        PerfilProfesional.objects.create(
+            aspirante=aspirante,
+            habilidades_tecnicas=["SAP CCO", "SAP Business One"],
+            experiencia_meses=experiencia_meses,
+            actualizado_en=ahora,
+        )
+        return usuario, aspirante
+
+    def cliente_de(self, usuario):
+        cliente = APIClient()
+        cliente.force_authenticate(user=usuario)
+        return cliente
+
+
+class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
     """
     Matriz de acceso de /api/postulaciones/.
 
@@ -412,48 +466,6 @@ class PostulacionAccesoTest(TestCase):
         cls.solo_consulta = cls._crear_usuario(
             "consulta@ene8.com.mx", "Coni Consulta", "consulta", ahora
         )
-
-    @classmethod
-    def _crear_usuario(cls, email, nombre, rol_clave, ahora):
-        usuario = Usuario.objects.create(
-            id=uuid.uuid4(),
-            nombre_completo=nombre,
-            email=email,
-            password_hash="!",
-            estado=EstadoUsuario.ACTIVO,
-            creado_en=ahora,
-            actualizado_en=ahora,
-        )
-        UsuarioRol.objects.create(
-            usuario=usuario,
-            rol=Rol.objects.get(clave=rol_clave),
-            asignado_en=ahora,
-        )
-        return usuario
-
-    @classmethod
-    def _crear_aspirante(cls, email, aspirante_id, nombre, rol_clave, ahora):
-        usuario = cls._crear_usuario(email, nombre, rol_clave, ahora)
-        aspirante = Aspirante.objects.create(
-            id=aspirante_id,
-            usuario=usuario,
-            matricula=aspirante_id,
-            nombre_completo=nombre,
-            email=email,
-            registrado_en=ahora,
-            actualizado_en=ahora,
-        )
-        PerfilProfesional.objects.create(
-            aspirante=aspirante,
-            habilidades_tecnicas=["SAP CCO", "SAP Business One"],
-            actualizado_en=ahora,
-        )
-        return usuario, aspirante
-
-    def cliente_de(self, usuario):
-        cliente = APIClient()
-        cliente.force_authenticate(user=usuario)
-        return cliente
 
     def ids_de(self, respuesta):
         datos = respuesta.data
@@ -578,16 +590,18 @@ class PostulacionAccesoTest(TestCase):
 
         self.assertEqual(respuesta.status_code, 403)
 
-    # --- Sólo lectura ---------------------------------------------------
+    # --- Escrituras permitidas y prohibidas -------------------------------
 
-    def test_el_modulo_es_de_solo_lectura(self):
+    def test_una_postulacion_existente_no_se_edita_ni_se_borra(self):
+        """
+        El alta se abrió para la bolsa de trabajo, pero mover el proceso —o
+        deshacerlo— sigue sin tener endpoint: eso se hace por fuera del API.
+        """
         cliente = self.cliente_de(self.administrador)
-        lista = reverse("api:postulacion-list")
         detalle = reverse(
             "api:postulacion-detail", args=[self.postulacion_propia.id]
         )
 
-        self.assertEqual(cliente.post(lista, {}, format="json").status_code, 405)
         self.assertEqual(
             cliente.patch(detalle, {"estado": "contratado"}, format="json").status_code,
             405,
@@ -666,3 +680,240 @@ class PostulacionAccesoTest(TestCase):
             else respuesta.data
         )
         self.assertEqual(resultados[0]["aspirante"]["habilidades_tecnicas"], [])
+
+
+class PostulacionAltaTest(UsuariosDePruebaMixin, TestCase):
+    """
+    Alta de postulaciones desde la bolsa de trabajo.
+
+    `POST /api/postulaciones/` es lo que dispara el botón "Enviar mi CV": el
+    aspirante sale de la sesión y sólo se aceptan los datos que él declara,
+    nunca el estado ni la etapa del proceso.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        ahora = timezone.now()
+        cls.ahora = ahora
+
+        cls.vacante = cls._crear_vacante(
+            "Consultor SAP Customer Checkout",
+            ahora,
+            estado=EstadoVacante.PUBLICADA,
+            publicada_en=ahora - timedelta(days=1),
+        )
+        cls.borrador = cls._crear_vacante(
+            "Vacante en borrador", ahora, estado=EstadoVacante.BORRADOR
+        )
+        cls.cerrada = cls._crear_vacante(
+            "Convocatoria vencida",
+            ahora,
+            estado=EstadoVacante.PUBLICADA,
+            publicada_en=ahora - timedelta(days=30),
+            cierra_en=ahora - timedelta(days=1),
+        )
+
+        cls.usuario_aspirante, cls.aspirante = cls._crear_aspirante(
+            "ana@ene8.com.mx",
+            "TEST-ALTA-001",
+            "Ana Gómez",
+            "aspirante",
+            ahora,
+            experiencia_meses=60,
+        )
+        cls.reclutador = cls._crear_usuario(
+            "reclutador@ene8.com.mx", "Rita Ruiz", "reclutador", ahora
+        )
+
+    @classmethod
+    def _crear_vacante(cls, titulo, ahora, **extra):
+        return Vacante.objects.create(
+            titulo=titulo,
+            modalidad=ModalidadVacante.HIBRIDO,
+            creado_en=ahora,
+            actualizado_en=ahora,
+            **extra,
+        )
+
+    def postularse(self, usuario=None, **cuerpo):
+        cuerpo.setdefault("vacante", self.vacante.id)
+        return self.cliente_de(usuario or self.usuario_aspirante).post(
+            reverse("api:postulacion-list"), cuerpo, format="json"
+        )
+
+    # --- Camino feliz -----------------------------------------------------
+
+    def test_el_aspirante_se_postula_y_queda_registrada(self):
+        respuesta = self.postularse(
+            ultimo_empleo="Analista Sr. @ GNP Seguros",
+            experiencia_meses=48,
+            expectativas_salariales="48000.00",
+            horas_deseadas=40,
+            disponibilidad=["Lunes a viernes"],
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.aspirante_id, self.aspirante.id)
+        self.assertEqual(postulacion.vacante_id, self.vacante.id)
+        self.assertEqual(postulacion.ultimo_empleo, "Analista Sr. @ GNP Seguros")
+        self.assertEqual(postulacion.experiencia_meses, 48)
+        self.assertEqual(postulacion.horas_deseadas, 40)
+        self.assertEqual(postulacion.disponibilidad, ["Lunes a viernes"])
+
+    def test_nace_en_nuevo_sin_avanzar_el_proceso(self):
+        respuesta = self.postularse()
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.estado, EstadoPostulacion.NUEVO)
+        self.assertEqual(postulacion.etapa, "Postulación recibida")
+        self.assertEqual(postulacion.progreso, 0)
+
+    def test_responde_con_la_forma_que_usa_el_listado(self):
+        respuesta = self.postularse()
+
+        self.assertEqual(
+            respuesta.data["aspirante"]["nombre_completo"], "Ana Gómez"
+        )
+        self.assertEqual(
+            respuesta.data["vacante_titulo"], "Consultor SAP Customer Checkout"
+        )
+        self.assertEqual(respuesta.data["estado"], EstadoPostulacion.NUEVO)
+
+    def test_la_postulacion_creada_aparece_en_su_listado(self):
+        creada = self.postularse().data["id"]
+
+        respuesta = self.cliente_de(self.usuario_aspirante).get(
+            reverse("api:postulacion-list")
+        )
+
+        resultados = (
+            respuesta.data["results"]
+            if isinstance(respuesta.data, dict)
+            else respuesta.data
+        )
+        self.assertIn(creada, {fila["id"] for fila in resultados})
+
+    def test_solo_pide_la_vacante(self):
+        """Postularse con un clic tiene que bastar: el resto es opcional."""
+        respuesta = self.postularse()
+
+        self.assertEqual(respuesta.status_code, 201)
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.disponibilidad, [])
+        self.assertIsNone(postulacion.ultimo_empleo)
+
+    # --- Herencia del expediente -----------------------------------------
+
+    def test_hereda_la_experiencia_del_perfil_cuando_no_se_declara(self):
+        respuesta = self.postularse()
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.experiencia_meses, 60)
+
+    def test_lo_declarado_gana_sobre_el_perfil(self):
+        respuesta = self.postularse(experiencia_meses=12)
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.experiencia_meses, 12)
+
+    # --- Quién puede postularse ------------------------------------------
+
+    def test_sin_sesion_responde_401(self):
+        respuesta = APIClient().post(
+            reverse("api:postulacion-list"),
+            {"vacante": self.vacante.id},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_el_reclutador_no_se_postula(self):
+        """No tiene expediente: gestiona el proceso, no participa en él."""
+        respuesta = self.postularse(usuario=self.reclutador)
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_no_se_puede_postular_a_nombre_de_otro(self):
+        otro_usuario, otro = self._crear_aspirante(
+            "luis@ene8.com.mx", "TEST-ALTA-002", "Luis Pérez", "aspirante", self.ahora
+        )
+
+        respuesta = self.postularse(aspirante=otro.id)
+
+        self.assertEqual(respuesta.status_code, 201)
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.aspirante_id, self.aspirante.id)
+        self.assertFalse(otro.postulaciones.exists())
+        self.assertFalse(
+            self.cliente_de(otro_usuario)
+            .get(reverse("api:postulacion-list"))
+            .data
+        )
+
+    def test_el_estado_del_proceso_no_se_acepta_del_cliente(self):
+        respuesta = self.postularse(estado=EstadoPostulacion.CONTRATADO, progreso=100)
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.estado, EstadoPostulacion.NUEVO)
+        self.assertEqual(postulacion.progreso, 0)
+
+    # --- Vacantes que no admiten postulación ------------------------------
+
+    def test_no_se_postula_dos_veces_a_la_misma_vacante(self):
+        self.postularse()
+
+        respuesta = self.postularse()
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("Ya te postulaste", str(respuesta.data["vacante"][0]))
+        self.assertEqual(
+            Postulacion.objects.filter(
+                aspirante=self.aspirante, vacante=self.vacante
+            ).count(),
+            1,
+        )
+
+    def test_rechaza_una_vacante_en_borrador(self):
+        respuesta = self.postularse(vacante=self.borrador.id)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertFalse(self.borrador.postulaciones.exists())
+
+    def test_rechaza_una_convocatoria_ya_cerrada(self):
+        respuesta = self.postularse(vacante=self.cerrada.id)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertFalse(self.cerrada.postulaciones.exists())
+
+    def test_rechaza_una_vacante_inexistente(self):
+        respuesta = self.postularse(vacante=999999)
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    # --- Validación de los datos declarados -------------------------------
+
+    def test_rechaza_horas_deseadas_no_positivas(self):
+        respuesta = self.postularse(horas_deseadas=0)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("horas_deseadas", respuesta.data)
+
+    def test_rechaza_experiencia_negativa(self):
+        respuesta = self.postularse(experiencia_meses=-1)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("experiencia_meses", respuesta.data)
+
+    def test_rechaza_una_disponibilidad_que_no_sea_lista_de_textos(self):
+        respuesta = self.postularse(disponibilidad=[{"dia": "lunes"}])
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("disponibilidad", respuesta.data)
+
+    def test_limpia_los_espacios_de_la_disponibilidad(self):
+        respuesta = self.postularse(disponibilidad=["  Lunes a viernes  ", "  "])
+
+        postulacion = Postulacion.objects.get(id=respuesta.data["id"])
+        self.assertEqual(postulacion.disponibilidad, ["Lunes a viernes"])

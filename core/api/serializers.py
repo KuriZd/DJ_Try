@@ -126,6 +126,122 @@ class PostulacionSerializer(serializers.ModelSerializer):
         )
 
 
+class PostulacionCrearSerializer(serializers.ModelSerializer):
+    """
+    Alta de una postulación desde la bolsa de trabajo.
+
+    El aspirante sale de la sesión y nunca del cuerpo: si viajara en el payload
+    cualquiera podría postular a otra persona. `estado`, `etapa` y `progreso`
+    tampoco se aceptan —una postulación nace en 'nuevo' y moverla por el
+    proceso es trabajo del reclutador—, así que los toman los defaults del
+    modelo.
+    """
+
+    class Meta:
+        model = Postulacion
+        fields = (
+            "id",
+            "vacante",
+            "experiencia_meses",
+            "ultimo_empleo",
+            "expectativas_salariales",
+            "horas_deseadas",
+            "disponibilidad",
+        )
+        read_only_fields = ("id",)
+
+    def validate_vacante(self, vacante):
+        """
+        Sólo se postula a lo que la bolsa pública ofrece.
+
+        Se repiten aquí las condiciones de VacantePublicaViewSet: sin esto, un
+        POST a mano podría colarse a un borrador o a una convocatoria cerrada,
+        que en la vista pública ni siquiera aparecen.
+        """
+        ahora = timezone.now()
+
+        esta_abierta = (
+            vacante.estado == EstadoVacante.PUBLICADA
+            and vacante.publicada_en is not None
+            and vacante.publicada_en <= ahora
+        )
+        if not esta_abierta:
+            raise serializers.ValidationError(
+                "Esa vacante no está abierta a postulaciones."
+            )
+
+        if vacante.cierra_en is not None and vacante.cierra_en <= ahora:
+            raise serializers.ValidationError(
+                "La convocatoria de esa vacante ya cerró."
+            )
+
+        return vacante
+
+    def validate_experiencia_meses(self, valor):
+        if valor is not None and valor < 0:
+            raise serializers.ValidationError(
+                "La experiencia no puede ser negativa."
+            )
+        return valor
+
+    def validate_horas_deseadas(self, valor):
+        if valor is not None and valor < 1:
+            raise serializers.ValidationError(
+                "Las horas deseadas se cuentan por semana completa."
+            )
+        return valor
+
+    def validate_expectativas_salariales(self, valor):
+        if valor is not None and valor < 0:
+            raise serializers.ValidationError(
+                "La expectativa salarial no puede ser negativa."
+            )
+        return valor
+
+    def validate_disponibilidad(self, valor):
+        """La columna es JSONB libre; aquí se acota a una lista de textos."""
+        if not isinstance(valor, list) or any(
+            not isinstance(item, str) for item in valor
+        ):
+            raise serializers.ValidationError(
+                "La disponibilidad se envía como una lista de textos."
+            )
+        return [item.strip() for item in valor if item.strip()]
+
+    def validate(self, attrs):
+        # El índice único (aspirante, vacante) ya lo impide, pero llegar por
+        # aquí da un mensaje entendible en vez de un 500 por IntegrityError.
+        # La carrera entre dos envíos simultáneos la atrapa la vista.
+        if Postulacion.objects.filter(
+            aspirante=self.context["expediente"], vacante=attrs["vacante"]
+        ).exists():
+            raise serializers.ValidationError(
+                {"vacante": "Ya te postulaste a esta vacante."}
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        expediente = self.context["expediente"]
+        perfil = getattr(expediente, "perfil_profesional", None)
+
+        # Lo que el formulario deja en blanco se hereda del expediente: el
+        # reclutador ve la experiencia declarada aunque el aspirante no la
+        # haya repetido al postularse.
+        if validated_data.get("experiencia_meses") is None and perfil is not None:
+            validated_data["experiencia_meses"] = perfil.experiencia_meses
+
+        validated_data["aspirante"] = expediente
+
+        # Las columnas traen DEFAULT now() en el schema, pero Django las manda
+        # en el INSERT: sin valor explícito viajarían como NULL.
+        ahora = timezone.now()
+        validated_data["registrada_en"] = ahora
+        validated_data["ultima_actividad_en"] = ahora
+
+        return super().create(validated_data)
+
+
 class VacantePublicaSerializer(serializers.ModelSerializer):
     """Datos públicos que consume la card de vacantes del frontend."""
 
