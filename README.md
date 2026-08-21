@@ -88,6 +88,18 @@ API y la conexión con PostgreSQL visita:
 GET http://127.0.0.1:8000/api/health/
 ```
 
+## Documentación interactiva de la API
+
+El proyecto utiliza `drf-yasg` para generar y consultar la documentación
+OpenAPI de forma interactiva. Con el servidor en ejecución, las interfaces
+están disponibles en:
+
+- Swagger UI: `http://127.0.0.1:8000/api/docs/`
+- ReDoc: `http://127.0.0.1:8000/api/redoc/`
+
+Desde Swagger UI también es posible autorizar solicitudes protegidas con un
+token JWT mediante el botón **Authorize** y el formato `Bearer <token>`.
+
 ## Pruebas
 
 ```powershell

@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     # Terceros
     "rest_framework",
     "corsheaders",
+    "drf_yasg",
 
     # Aplicaciones del proyecto
     "core",
@@ -161,6 +162,19 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
+}
+
+# Documentacion OpenAPI (drf-yasg)
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'Escribe: Bearer <token_de_acceso>',
+        },
+    },
+    'USE_SESSION_AUTH': False,
 }
 
 
