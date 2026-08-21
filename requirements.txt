@@ -2,6 +2,7 @@ Django
 djangorestframework
 django-cors-headers
 djangorestframework-simplejwt
+drf-yasg
 psycopg[binary]
 argon2-cffi
 bcrypt
