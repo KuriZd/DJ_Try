@@ -85,6 +85,22 @@ SELECT '7a15fc4f-d972-48f7-b3d4-4d5f1b877dab', id
 FROM roles
 WHERE clave = 'administrador';
 
+-- Usuarios AMIS de desarrollo. Contraseña inicial: Amis2026!
+INSERT INTO usuarios (
+  id, nombre_completo, email, password_hash, estado, email_verificado_en
+) VALUES
+  ('6dc07f5a-358c-4bd4-9f58-40fe36604393', 'Administrador AMIS', 'admin@amis.org', 'pbkdf2_sha256$1500000$Zrb4ZOEiEMlB58WPN5N8sA$EaQp2gpEC2kqG5/y4WSqIsHfPwgKk8DiJCLBbVoMlcA=', 'activo', now()),
+  ('a5434e6e-8073-4f02-aabf-a0e92f79d4ae', 'Aspirante AMIS', 'aspirante@amis.org', 'pbkdf2_sha256$1500000$MdLUbAiuonT4HXi5AO4TJ5$vyBvnOYQCyvzlnoPY7EWkQe6puZDlL0z15GynulgBjM=', 'activo', now());
+
+INSERT INTO usuarios_roles (usuario_id, rol_id)
+SELECT u.id, r.id
+FROM usuarios u
+JOIN roles r ON r.clave = CASE lower(u.email)
+  WHEN 'admin@amis.org' THEN 'administrador'
+  WHEN 'aspirante@amis.org' THEN 'aspirante'
+END
+WHERE lower(u.email) IN ('admin@amis.org', 'aspirante@amis.org');
+
 -- Usuarios de demostración, uno por rol. Contraseña para entorno local: 1234.
 INSERT INTO usuarios (
   id, nombre_completo, email, password_hash, estado, email_verificado_en
@@ -184,6 +200,8 @@ INSERT INTO aspirantes (
   puesto_aspirado, folio_aplicacion, estado_expediente, convocatoria_id,
   registrado_en
 ) VALUES
+  ('ASP-AMIS-001', 'AM2026-0007', 'Aspirante AMIS', 'aspirante@amis.org',
+   NULL, NULL, NULL, NULL, 'incompleto', NULL, now()),
   ('ASP-001', 'AM2026-0001', 'Ana Gómez Ríos', 'ana.gomez@amis.org',
    '+52 55 1234 5678', '12345678', 'Analista de riesgos', 'APP-2026-0001',
    'activo', 'AMIS-2026-01', '2026-01-12T09:30:00Z'),
@@ -202,6 +220,10 @@ INSERT INTO aspirantes (
   ('ASP-006', 'AM2026-0006', 'Julián Torres Molina', 'julian.torres@amis.org',
    '+52 55 6789 0123', '67890123', 'Técnico de mantenimiento', 'APP-2026-0006',
    'suspendido', 'AMIS-2026-01', '2026-01-20T08:15:00Z');
+
+UPDATE aspirantes
+SET usuario_id = 'a5434e6e-8073-4f02-aabf-a0e92f79d4ae'
+WHERE id = 'ASP-AMIS-001';
 
 INSERT INTO aspirantes_requisitos (aspirante_id, requisito_clave, cumplido)
 SELECT a.id, r.clave,
