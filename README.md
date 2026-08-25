@@ -88,6 +88,49 @@ API y la conexión con PostgreSQL visita:
 GET http://127.0.0.1:8000/api/health/
 ```
 
+### Reportes psicométricos externos
+
+Mientras se integra el sistema externo de evaluaciones, el reporte PDF se
+archiva con `POST /api/reportes-psicometricos/`. Hay dos flujos, y el permiso
+decide cuál se aplica:
+
+| Permiso | Puede archivar | `origen` | A la venta |
+|---|---|---|---|
+| `reportes-psicometricos:administrar` | El expediente de cualquier aspirante | `plataforma` | Sí |
+| `reportes-psicometricos:subir-propio` | Únicamente el expediente propio | `propia` | No |
+
+El origen no lo declara el cliente: sale del permiso con el que entra. Por eso
+un aspirante no puede hacer pasar su documento por uno aplicado por la
+plataforma, ni ponerlo a la venta.
+
+El expediente es **histórico**: conserva un reporte por evaluación aplicada.
+Volver a subir la *misma* `referencia_evaluacion_externa` sí reemplaza al
+anterior —eso es una corrección, no un documento nuevo— y deja constancia en
+`historial_reportes_psicometricos`. Sin referencia externa no hay reemplazo.
+
+Junto al archivo se guardan los metadatos con los que la interfaz arma el
+archivero: `area_clave`, `aplicada_en`, `vigente_hasta`, `puntaje`, `nivel`,
+`paginas` y `escalas`. Las escalas son una lista de `{"nombre", "puntaje"}` y,
+como la carga viaja en `multipart/form-data`, se mandan como cadena JSON en un
+solo campo.
+
+En `GET`, el aspirante ve todo su historial —menos lo deshabilitado— y el
+personal con permiso de administración ve todo, con `?aspirante=ASP-001` para
+acotar. Los archivos se almacenan de forma privada y su ruta física no se
+expone en la API.
+
+Configuración disponible por variables de entorno:
+
+```powershell
+$env:PRIVATE_MEDIA_ROOT="C:\ruta\privada\reportes"
+$env:REPORTE_PSICOMETRICO_PRECIO="499.00"
+$env:REPORTE_PSICOMETRICO_MONEDA="MXN"
+$env:REPORTE_PSICOMETRICO_MAX_MB="10"
+```
+
+La descarga se habilitará únicamente después de que PayPal confirme el pago;
+esta primera etapa no publica una ruta directa al PDF.
+
 ## Documentación interactiva de la API
 
 El proyecto utiliza `drf-yasg` para generar y consultar la documentación

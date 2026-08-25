@@ -132,6 +132,15 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Los reportes psicometricos son documentos privados. MEDIA_ROOT se usa como
+# almacenamiento local durante esta etapa, pero no se publica mediante urls.py.
+MEDIA_ROOT = Path(os.getenv('PRIVATE_MEDIA_ROOT', BASE_DIR / 'media'))
+REPORTE_PSICOMETRICO_PRECIO = os.getenv('REPORTE_PSICOMETRICO_PRECIO', '499.00')
+REPORTE_PSICOMETRICO_MONEDA = os.getenv('REPORTE_PSICOMETRICO_MONEDA', 'MXN')
+REPORTE_PSICOMETRICO_MAX_MB = int(
+    os.getenv('REPORTE_PSICOMETRICO_MAX_MB', '10')
+)
+
 
 # Django REST Framework
 REST_FRAMEWORK = {

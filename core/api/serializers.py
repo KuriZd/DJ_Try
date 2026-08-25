@@ -1,21 +1,30 @@
+import hashlib
+import json
 import uuid
 from datetime import date
+from decimal import Decimal
 
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.utils import html
 
 from core.models import (
     Aspirante,
     Empresa,
     EstadoExpediente,
+    EstadoReportePsicometrico,
     EstadoUsuario,
     EstadoVacante,
     PerfilProfesional,
     Postulacion,
+    HistorialReportePsicometrico,
+    OrigenReportePsicometrico,
+    ReportePsicometrico,
     Rol,
     Usuario,
     UsuarioRol,
@@ -965,3 +974,285 @@ class CambioPasswordSerializer(serializers.Serializer):
         usuario.actualizado_en = timezone.now()
         usuario.save(update_fields=["password_hash", "actualizado_en"])
         return usuario
+
+PERMISO_ADMIN_REPORTES = "reportes-psicometricos:administrar"
+PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
+
+
+class EscalaPsicometricaSerializer(serializers.Serializer):
+    """Un factor del instrumento con el puntaje que obtuvo la persona."""
+
+    nombre = serializers.CharField(max_length=120)
+    puntaje = serializers.IntegerField(min_value=0, max_value=100)
+
+
+class EscalasField(serializers.ListField):
+    """Escalas del instrumento, tambien cuando llegan dentro de un multipart.
+
+    La carga del archivo obliga a `multipart/form-data`, y ahi una lista de
+    objetos no cabe: el cliente manda las escalas como una cadena JSON en un
+    solo campo. `ListField` la tomaria con `getlist` y entregaria la cadena
+    envuelta en una lista, asi que aqui se toma el valor crudo y se decodifica.
+    """
+
+    child = EscalaPsicometricaSerializer()
+
+    def get_value(self, dictionary):
+        if html.is_html_input(dictionary):
+            return dictionary.get(self.field_name, serializers.empty)
+        return super().get_value(dictionary)
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                raise serializers.ValidationError(
+                    "Las escalas deben venir como una lista JSON."
+                )
+        return super().to_internal_value(data)
+
+
+class ReportePsicometricoSerializer(serializers.ModelSerializer):
+    """Reporte psicometrico del expediente.
+
+    Sirve a dos flujos con reglas distintas: el administrador archiva el
+    informe de una evaluacion aplicada por la plataforma, y el propio
+    aspirante archiva el que trae de fuera. El origen no lo declara el
+    cliente, lo decide el permiso con el que entra.
+    """
+
+    aspirante = serializers.PrimaryKeyRelatedField(
+        queryset=Aspirante.objects.all(), required=False
+    )
+    aspirante_nombre = serializers.CharField(
+        source="aspirante.nombre_completo", read_only=True
+    )
+    archivo = serializers.FileField(write_only=True)
+    escalas = EscalasField(required=False)
+
+    class Meta:
+        model = ReportePsicometrico
+        fields = (
+            "id",
+            "aspirante",
+            "aspirante_nombre",
+            "referencia_evaluacion_externa",
+            "archivo",
+            "nombre_original",
+            "mime_type",
+            "tamano_bytes",
+            "checksum_sha256",
+            "precio",
+            "moneda",
+            "estado",
+            "origen",
+            "area_clave",
+            "aplicada_en",
+            "vigente_hasta",
+            "puntaje",
+            "nivel",
+            "escalas",
+            "paginas",
+            "disponible_para_compra",
+            "creado_en",
+            "actualizado_en",
+        )
+        read_only_fields = (
+            "id",
+            "aspirante_nombre",
+            "nombre_original",
+            "mime_type",
+            "tamano_bytes",
+            "checksum_sha256",
+            "precio",
+            "moneda",
+            "estado",
+            "origen",
+            "disponible_para_compra",
+            "creado_en",
+            "actualizado_en",
+        )
+
+    def _permisos(self):
+        return permisos_de(self.context["request"].user)
+
+    def _es_administrador(self):
+        return PERMISO_ADMIN_REPORTES in self._permisos()
+
+    def _aspirante_del_usuario(self):
+        aspirante = Aspirante.objects.filter(
+            usuario=self.context["request"].user
+        ).first()
+        if aspirante is None:
+            raise serializers.ValidationError(
+                {"aspirante": "Tu cuenta todavia no tiene expediente de aspirante."}
+            )
+        return aspirante
+
+    def validate_archivo(self, archivo):
+        maximo = settings.REPORTE_PSICOMETRICO_MAX_MB * 1024 * 1024
+        if archivo.size <= 0:
+            raise serializers.ValidationError("El PDF esta vacio.")
+        if archivo.size > maximo:
+            raise serializers.ValidationError(
+                f"El PDF no puede superar {settings.REPORTE_PSICOMETRICO_MAX_MB} MB."
+            )
+
+        encabezado = archivo.read(5)
+        archivo.seek(0)
+        if encabezado != b"%PDF-":
+            raise serializers.ValidationError("El archivo no es un PDF valido.")
+
+        content_type = getattr(archivo, "content_type", "")
+        if content_type not in ("application/pdf", "application/x-pdf"):
+            raise serializers.ValidationError(
+                "El tipo de contenido debe ser application/pdf."
+            )
+        return archivo
+
+    def validate_puntaje(self, puntaje):
+        if puntaje is not None and not 0 <= puntaje <= 100:
+            raise serializers.ValidationError("El puntaje va de 0 a 100.")
+        return puntaje
+
+    def validate_paginas(self, paginas):
+        if paginas is not None and paginas < 0:
+            raise serializers.ValidationError("Las paginas no pueden ser negativas.")
+        return paginas
+
+    def validate(self, attrs):
+        # A nombre de quien se archiva. El aspirante no puede escribir en el
+        # expediente de otro aunque mande su id en el formulario.
+        if self._es_administrador():
+            if attrs.get("aspirante") is None:
+                raise serializers.ValidationError(
+                    {"aspirante": "Indica a que aspirante pertenece el reporte."}
+                )
+        else:
+            propio = self._aspirante_del_usuario()
+            declarado = attrs.get("aspirante")
+            if declarado is not None and declarado.pk != propio.pk:
+                raise serializers.ValidationError(
+                    {"aspirante": "Solo puedes archivar reportes en tu expediente."}
+                )
+            attrs["aspirante"] = propio
+
+        aplicada_en = attrs.get("aplicada_en")
+        vigente_hasta = attrs.get("vigente_hasta")
+        ahora = timezone.now()
+        if aplicada_en and aplicada_en > ahora:
+            raise serializers.ValidationError(
+                {"aplicada_en": "La fecha de aplicacion no puede estar en el futuro."}
+            )
+        if aplicada_en and vigente_hasta and vigente_hasta < aplicada_en:
+            raise serializers.ValidationError(
+                {
+                    "vigente_hasta": (
+                        "La vigencia no puede terminar antes de la aplicacion."
+                    )
+                }
+            )
+        return attrs
+
+    def _reemplazar_misma_evaluacion(self, aspirante, referencia, ahora):
+        """Marca como reemplazado el reporte previo de esa misma evaluacion.
+
+        Solo aplica cuando la carga trae referencia externa: dos informes de
+        evaluaciones distintas conviven en el archivero, pero volver a subir
+        la misma evaluacion es una correccion, no un documento nuevo.
+        """
+        if not referencia:
+            return []
+
+        anteriores = list(
+            ReportePsicometrico.objects.select_for_update().filter(
+                aspirante=aspirante,
+                referencia_evaluacion_externa=referencia,
+                estado=EstadoReportePsicometrico.DISPONIBLE,
+            )
+        )
+        ReportePsicometrico.objects.filter(
+            id__in=[anterior.id for anterior in anteriores]
+        ).update(
+            estado=EstadoReportePsicometrico.REEMPLAZADO,
+            disponible_para_compra=False,
+            actualizado_en=ahora,
+        )
+        return anteriores
+
+    @transaction.atomic
+    def create(self, validated_data):
+        archivo = validated_data["archivo"]
+        checksum = hashlib.sha256()
+        for bloque in archivo.chunks():
+            checksum.update(bloque)
+        archivo.seek(0)
+
+        usuario = self.context["request"].user
+        aspirante = validated_data["aspirante"]
+        referencia = validated_data.get("referencia_evaluacion_externa")
+        ahora = timezone.now()
+
+        # Lo que sube el propio aspirante es su documento, no un informe que
+        # la plataforma pueda vender.
+        de_plataforma = self._es_administrador()
+        origen = (
+            OrigenReportePsicometrico.PLATAFORMA
+            if de_plataforma
+            else OrigenReportePsicometrico.PROPIA
+        )
+
+        # Bloquear el aspirante serializa incluso las dos primeras cargas
+        # concurrentes, cuando todavia no existe un reporte que bloquear.
+        Aspirante.objects.select_for_update().get(pk=aspirante.pk)
+        anteriores = self._reemplazar_misma_evaluacion(aspirante, referencia, ahora)
+
+        escalas = [dict(escala) for escala in validated_data.pop("escalas", [])]
+
+        reporte = ReportePsicometrico.objects.create(
+            id=uuid.uuid4(),
+            subido_por=usuario,
+            nombre_original=archivo.name[:255],
+            mime_type="application/pdf",
+            tamano_bytes=archivo.size,
+            checksum_sha256=checksum.hexdigest(),
+            precio=Decimal(settings.REPORTE_PSICOMETRICO_PRECIO),
+            moneda=settings.REPORTE_PSICOMETRICO_MONEDA.upper(),
+            estado=EstadoReportePsicometrico.DISPONIBLE,
+            origen=origen,
+            escalas=escalas,
+            disponible_para_compra=de_plataforma,
+            creado_en=ahora,
+            actualizado_en=ahora,
+            **validated_data,
+        )
+        HistorialReportePsicometrico.objects.create(
+            id=uuid.uuid4(),
+            reporte=reporte,
+            accion="uploaded",
+            realizado_por=usuario,
+            realizado_por_email=usuario.email,
+            metadata={
+                "nombre_original": reporte.nombre_original,
+                "tamano_bytes": reporte.tamano_bytes,
+                "checksum_sha256": reporte.checksum_sha256,
+                "origen": reporte.origen,
+            },
+            creado_en=ahora,
+        )
+        HistorialReportePsicometrico.objects.bulk_create(
+            [
+                HistorialReportePsicometrico(
+                    id=uuid.uuid4(),
+                    reporte=anterior,
+                    accion="replaced",
+                    realizado_por=usuario,
+                    realizado_por_email=usuario.email,
+                    metadata={"reemplazado_por": str(reporte.id)},
+                    creado_en=ahora,
+                )
+                for anterior in anteriores
+            ]
+        )
+        return reporte

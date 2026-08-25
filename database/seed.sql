@@ -12,6 +12,8 @@ INSERT INTO roles (clave, nombre, descripcion) VALUES
 
 INSERT INTO permisos (clave, descripcion) VALUES
   ('usuarios:administrar', 'Administrar usuarios y roles'),
+  ('reportes-psicometricos:administrar', 'Subir y administrar reportes psicometricos'),
+  ('reportes-psicometricos:subir-propio', 'Subir reportes psicometricos al expediente propio'),
   ('aspirantes:consultar', 'Consultar el expediente de cualquier aspirante'),
   ('vacantes:consultar', 'Consultar vacantes'),
   ('vacantes:administrar', 'Crear y editar vacantes'),
@@ -50,7 +52,8 @@ WHERE r.clave = 'aspirante'
     'vacantes:consultar',
     'postulaciones:consultar',
     'certificados:consultar',
-    'certificados:descargar'
+    'certificados:descargar',
+    'reportes-psicometricos:subir-propio'
   );
 
 INSERT INTO roles_permisos (rol_id, permiso_id)

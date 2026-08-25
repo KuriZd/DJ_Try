@@ -274,6 +274,72 @@ CREATE TABLE documentos_aspirante (
   subido_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Reportes psicometricos generados por un sistema externo y almacenados de
+-- forma privada hasta que el backend confirme su pago.
+CREATE TABLE reportes_psicometricos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  aspirante_id VARCHAR(30) NOT NULL REFERENCES aspirantes(id) ON DELETE RESTRICT,
+  subido_por_id UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  referencia_evaluacion_externa VARCHAR(180),
+  nombre_original VARCHAR(255) NOT NULL,
+  archivo_clave TEXT NOT NULL,
+  mime_type VARCHAR(100) NOT NULL DEFAULT 'application/pdf',
+  tamano_bytes BIGINT NOT NULL CHECK (tamano_bytes > 0),
+  checksum_sha256 CHAR(64) NOT NULL,
+  precio NUMERIC(12,2) NOT NULL CHECK (precio >= 0),
+  moneda CHAR(3) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'available'
+    CHECK (estado IN ('available', 'replaced', 'disabled')),
+  -- Quien produjo el documento. Lo que sube el propio aspirante no se
+  -- comercializa, por eso el origen decide disponible_para_compra.
+  origen VARCHAR(20) NOT NULL DEFAULT 'plataforma'
+    CHECK (origen IN ('plataforma', 'propia')),
+  -- Metadatos de la evaluacion: sin ellos el reporte es un PDF suelto y no
+  -- se puede agrupar por area, ni saber si sigue vigente, ni leer el perfil.
+  area_clave VARCHAR(40) NOT NULL DEFAULT 'otra',
+  aplicada_en TIMESTAMPTZ,
+  vigente_hasta TIMESTAMPTZ,
+  puntaje SMALLINT CHECK (puntaje IS NULL OR (puntaje >= 0 AND puntaje <= 100)),
+  nivel VARCHAR(40),
+  -- Lista de {"nombre": str, "puntaje": int}: las escalas cambian con cada
+  -- instrumento y solo se leen completas, junto con su reporte.
+  escalas JSONB NOT NULL DEFAULT '[]'::jsonb,
+  paginas INTEGER CHECK (paginas IS NULL OR paginas >= 0),
+  disponible_para_compra BOOLEAN NOT NULL DEFAULT true,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT reporte_psicometrico_vigencia_coherente CHECK (
+    vigente_hasta IS NULL
+    OR aplicada_en IS NULL
+    OR vigente_hasta >= aplicada_en
+  )
+);
+
+CREATE INDEX reportes_psicometricos_aspirante_idx
+  ON reportes_psicometricos (aspirante_id, creado_en DESC);
+
+CREATE INDEX reportes_psicometricos_area_idx
+  ON reportes_psicometricos (aspirante_id, area_clave, aplicada_en DESC);
+
+-- El expediente conserva un reporte por evaluacion aplicada. Lo que no se
+-- permite es duplicar la MISMA evaluacion externa con dos vigentes.
+CREATE UNIQUE INDEX reporte_psicometrico_evaluacion_unico
+  ON reportes_psicometricos (aspirante_id, referencia_evaluacion_externa)
+  WHERE estado = 'available' AND referencia_evaluacion_externa IS NOT NULL;
+
+CREATE TABLE historial_reportes_psicometricos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reporte_id UUID NOT NULL REFERENCES reportes_psicometricos(id) ON DELETE CASCADE,
+  accion VARCHAR(50) NOT NULL,
+  realizado_por_id UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  realizado_por_email VARCHAR(254),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX historial_reportes_psicometricos_idx
+  ON historial_reportes_psicometricos (reporte_id, creado_en);
+
 -- Certificados
 CREATE TABLE tipos_certificado (
   clave VARCHAR(40) PRIMARY KEY,

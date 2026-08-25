@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone as datetime_timezone
 
 from django.db import IntegrityError, connection, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import api_view, permission_classes
@@ -22,7 +22,15 @@ from rest_framework.status import (
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Aspirante, EstadoVacante, Postulacion, Sesion, Vacante
+from core.models import (
+    Aspirante,
+    EstadoReportePsicometrico,
+    EstadoVacante,
+    Postulacion,
+    ReportePsicometrico,
+    Sesion,
+    Vacante,
+)
 
 from .serializers import (
     AspiranteSerializer,
@@ -31,6 +39,7 @@ from .serializers import (
     PerfilUpdateSerializer,
     PostulacionCrearSerializer,
     PostulacionSerializer,
+    ReportePsicometricoSerializer,
     RegistroSerializer,
     UsuarioSerializer,
     VacanteAdminSerializer,
@@ -49,6 +58,9 @@ def api_root(request):
             "usuario_actual": reverse("api:usuario-actual", request=request),
             "aspirantes": reverse("api:aspirante-list", request=request),
             "postulaciones": reverse("api:postulacion-list", request=request),
+            "reportes_psicometricos": reverse(
+                "api:reporte-psicometrico-list", request=request
+            ),
             "vacantes": reverse("api:vacante-list", request=request),
         }
     )
@@ -439,3 +451,53 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
             postulacion, context=self.get_serializer_context()
         )
         return Response(salida.data, status=HTTP_201_CREATED)
+
+
+PERMISO_ADMIN_REPORTES = "reportes-psicometricos:administrar"
+PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
+
+
+class PuedeSubirReportesPsicometricos(BasePermission):
+    """La consulta es personal; para subir hace falta uno de dos permisos.
+
+    El administrador archiva el informe de cualquier aspirante; el aspirante
+    archiva el suyo. Quién es cada quien lo resuelve el serializer, que es
+    donde se conoce el expediente destino.
+    """
+
+    message = "No tienes permiso para archivar reportes psicométricos."
+
+    def has_permission(self, request, view):
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return True
+        permisos = permisos_de(request.user)
+        return bool(
+            permisos & {PERMISO_ADMIN_REPORTES, PERMISO_SUBIR_REPORTE_PROPIO}
+        )
+
+
+class ReportePsicometricoViewSet(
+    mixins.CreateModelMixin,
+    viewsets.ReadOnlyModelViewSet,
+):
+    """Carga administrativa y consulta privada de reportes externos."""
+
+    serializer_class = ReportePsicometricoSerializer
+    permission_classes = [IsAuthenticated, PuedeSubirReportesPsicometricos]
+
+    def get_queryset(self):
+        # La fecha de aplicacion manda; los reportes que no la traen no se
+        # cuelan al principio por ser NULL, que es el orden natural de Postgres.
+        base = ReportePsicometrico.objects.select_related(
+            "aspirante", "subido_por"
+        ).order_by(F("aplicada_en").desc(nulls_last=True), "-creado_en")
+
+        if PERMISO_ADMIN_REPORTES in permisos_de(self.request.user):
+            aspirante = self.request.query_params.get("aspirante")
+            return base.filter(aspirante=aspirante) if aspirante else base
+
+        # El expediente propio es histórico: se ven todos los reportes, no
+        # sólo el último. Los deshabilitados no, que para eso se deshabilitan.
+        return base.filter(aspirante__usuario=self.request.user).exclude(
+            estado=EstadoReportePsicometrico.DESHABILITADO
+        )

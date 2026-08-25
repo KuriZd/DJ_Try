@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -68,6 +70,40 @@ class EstadoEnvio(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ENVIADO = "enviado", "Enviado"
     FALLIDO = "fallido", "Fallido"
+
+
+class EstadoReportePsicometrico(models.TextChoices):
+    DISPONIBLE = "available", "Disponible"
+    REEMPLAZADO = "replaced", "Reemplazado"
+    DESHABILITADO = "disabled", "Deshabilitado"
+
+
+class OrigenReportePsicometrico(models.TextChoices):
+    """Quien produjo el documento, no quien lo cargó.
+
+    Un administrador puede subir el informe de una evaluación aplicada por la
+    plataforma (`plataforma`) y el propio aspirante puede archivar el informe
+    que trae de fuera (`propia`). Sólo el primero es comercializable.
+    """
+
+    PLATAFORMA = "plataforma", "Aplicada por la plataforma"
+    PROPIA = "propia", "Subida por el aspirante"
+
+
+class AreaPsicometrica(models.TextChoices):
+    """Áreas del perfil profesional que cubre una evaluación.
+
+    Las claves las comparte la interfaz para agrupar y filtrar el archivero,
+    así que tienen que coincidir letra por letra con las suyas.
+    """
+
+    RAZONAMIENTO = "razonamiento", "Razonamiento"
+    PERSONALIDAD = "personalidad", "Personalidad"
+    INTEGRIDAD = "integridad", "Integridad"
+    LIDERAZGO = "liderazgo", "Liderazgo"
+    ESTRES = "estres", "Manejo de estrés"
+    COMPARADO = "comparado", "Comparado"
+    OTRA = "otra", "Otra evaluación"
 
 
 class TablaExistente(models.Model):
@@ -489,6 +525,98 @@ class DocumentoAspirante(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "documentos_aspirante"
+
+
+def ruta_reporte_psicometrico(instance, filename):
+    """Evita exponer o reutilizar el nombre proporcionado por el cliente."""
+    return f"reportes_psicometricos/{instance.aspirante_id}/{uuid.uuid4()}.pdf"
+
+
+class ReportePsicometrico(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    aspirante = models.ForeignKey(
+        Aspirante,
+        models.PROTECT,
+        db_column="aspirante_id",
+        related_name="reportes_psicometricos",
+    )
+    subido_por = models.ForeignKey(
+        Usuario,
+        models.SET_NULL,
+        db_column="subido_por_id",
+        null=True,
+        blank=True,
+        related_name="reportes_psicometricos_subidos",
+    )
+    referencia_evaluacion_externa = models.CharField(
+        max_length=180, null=True, blank=True
+    )
+    nombre_original = models.CharField(max_length=255)
+    archivo = models.FileField(
+        upload_to=ruta_reporte_psicometrico, db_column="archivo_clave"
+    )
+    mime_type = models.CharField(max_length=100)
+    tamano_bytes = models.BigIntegerField()
+    checksum_sha256 = models.CharField(max_length=64)
+    precio = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoReportePsicometrico.choices,
+        default=EstadoReportePsicometrico.DISPONIBLE,
+    )
+    origen = models.CharField(
+        max_length=20,
+        choices=OrigenReportePsicometrico.choices,
+        default=OrigenReportePsicometrico.PLATAFORMA,
+    )
+    area_clave = models.CharField(
+        max_length=40,
+        choices=AreaPsicometrica.choices,
+        default=AreaPsicometrica.OTRA,
+    )
+    # Fecha en que se aplicó la evaluación, no en que se cargó el archivo:
+    # con eso el archivero ordena y agrupa por año.
+    aplicada_en = models.DateTimeField(null=True, blank=True)
+    vigente_hasta = models.DateTimeField(null=True, blank=True)
+    puntaje = models.SmallIntegerField(null=True, blank=True)
+    nivel = models.CharField(max_length=40, null=True, blank=True)
+    # Lista de {"nombre": str, "puntaje": int}. Es un JSONB y no una tabla
+    # aparte porque las escalas varían con cada instrumento y sólo se leen
+    # completas, junto con su reporte.
+    escalas = models.JSONField(default=list)
+    paginas = models.IntegerField(null=True, blank=True)
+    disponible_para_compra = models.BooleanField(default=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "reportes_psicometricos"
+
+
+class HistorialReportePsicometrico(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    reporte = models.ForeignKey(
+        ReportePsicometrico,
+        models.CASCADE,
+        db_column="reporte_id",
+        related_name="historial",
+    )
+    accion = models.CharField(max_length=50)
+    realizado_por = models.ForeignKey(
+        Usuario,
+        models.SET_NULL,
+        db_column="realizado_por_id",
+        null=True,
+        blank=True,
+        related_name="acciones_reportes_psicometricos",
+    )
+    realizado_por_email = models.EmailField(max_length=254, null=True, blank=True)
+    metadata = models.JSONField(default=dict)
+    creado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "historial_reportes_psicometricos"
 
 
 class TipoCertificado(TablaExistente):
