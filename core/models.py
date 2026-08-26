@@ -106,6 +106,27 @@ class AreaPsicometrica(models.TextChoices):
     OTRA = "otra", "Otra evaluación"
 
 
+class EstadoPagoPaypal(models.TextChoices):
+    PENDING = "PENDING", "Pendiente"
+    CREATED = "CREATED", "Creada"
+    APPROVED = "APPROVED", "Aprobada"
+    COMPLETED = "COMPLETED", "Completada"
+    FAILED = "FAILED", "Fallida"
+    CANCELLED = "CANCELLED", "Cancelada"
+    REFUNDED = "REFUNDED", "Reembolsada"
+
+
+class TipoTransaccionPaypal(models.TextChoices):
+    CAPTURE = "CAPTURE", "Captura"
+    REFUND = "REFUND", "Reembolso"
+
+
+class OrigenEventoPago(models.TextChoices):
+    API = "API", "API"
+    WEBHOOK = "WEBHOOK", "Webhook"
+    SYSTEM = "SYSTEM", "Sistema"
+
+
 class TablaExistente(models.Model):
     """Base para tablas creadas por database/schema.sql."""
 
@@ -617,6 +638,120 @@ class HistorialReportePsicometrico(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "historial_reportes_psicometricos"
+
+
+class OrdenPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    referencia_interna = models.CharField(max_length=50, unique=True)
+    comprador = models.ForeignKey(
+        Usuario,
+        models.PROTECT,
+        db_column="comprador_id",
+        related_name="ordenes_pago_paypal",
+    )
+    reporte = models.ForeignKey(
+        ReportePsicometrico,
+        models.PROTECT,
+        db_column="reporte_id",
+        related_name="ordenes_pago",
+    )
+    referencia_evaluacion_externa = models.CharField(
+        max_length=180, null=True, blank=True
+    )
+    paypal_order_id = models.CharField(
+        max_length=64, unique=True, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoPagoPaypal.choices,
+        default=EstadoPagoPaypal.PENDING,
+    )
+    clave_idempotencia = models.CharField(max_length=128, null=True, blank=True)
+    approval_url = models.TextField(null=True, blank=True)
+    paypal_request_id = models.CharField(max_length=64, null=True, blank=True)
+    respuesta_proveedor = models.JSONField(default=dict)
+    codigo_error = models.CharField(max_length=100, null=True, blank=True)
+    mensaje_error = models.TextField(null=True, blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    expira_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+    pagado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TablaExistente.Meta):
+        db_table = "ordenes_pago_paypal"
+
+
+class TransaccionPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    orden = models.ForeignKey(
+        OrdenPagoPaypal,
+        models.PROTECT,
+        db_column="orden_id",
+        related_name="transacciones",
+    )
+    tipo = models.CharField(max_length=20, choices=TipoTransaccionPaypal.choices)
+    paypal_capture_id = models.CharField(
+        max_length=64, null=True, blank=True
+    )
+    paypal_refund_id = models.CharField(
+        max_length=64, unique=True, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(max_length=20, choices=EstadoPagoPaypal.choices)
+    comision = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    monto_neto = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    respuesta_proveedor = models.JSONField(default=dict)
+    procesada_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "transacciones_pago_paypal"
+
+
+class EventoPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    orden = models.ForeignKey(
+        OrdenPagoPaypal,
+        models.SET_NULL,
+        db_column="orden_id",
+        null=True,
+        blank=True,
+        related_name="eventos",
+    )
+    transaccion = models.ForeignKey(
+        TransaccionPagoPaypal,
+        models.SET_NULL,
+        db_column="transaccion_id",
+        null=True,
+        blank=True,
+        related_name="eventos",
+    )
+    paypal_event_id = models.CharField(
+        max_length=100, unique=True, null=True, blank=True
+    )
+    tipo_evento = models.CharField(max_length=100)
+    origen = models.CharField(max_length=20, choices=OrigenEventoPago.choices)
+    estado_anterior = models.CharField(max_length=20, null=True, blank=True)
+    estado_nuevo = models.CharField(max_length=20, null=True, blank=True)
+    payload = models.JSONField(default=dict)
+    procesado = models.BooleanField(default=False)
+    mensaje_error = models.TextField(null=True, blank=True)
+    recibido_en = models.DateTimeField()
+    procesado_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "eventos_pago_paypal"
 
 
 class TipoCertificado(TablaExistente):
