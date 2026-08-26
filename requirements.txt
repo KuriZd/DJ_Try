@@ -4,5 +4,7 @@ django-cors-headers
 djangorestframework-simplejwt
 drf-yasg
 psycopg[binary]
+requests
+python-dotenv
 argon2-cffi
 bcrypt
