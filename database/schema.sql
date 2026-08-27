@@ -305,6 +305,8 @@ CREATE TABLE reportes_psicometricos (
   -- instrumento y solo se leen completas, junto con su reporte.
   escalas JSONB NOT NULL DEFAULT '[]'::jsonb,
   paginas INTEGER CHECK (paginas IS NULL OR paginas >= 0),
+  -- Nota libre de quien archiva el documento.
+  notas TEXT,
   disponible_para_compra BOOLEAN NOT NULL DEFAULT true,
   creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
   actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
