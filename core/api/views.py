@@ -5,9 +5,11 @@ from datetime import datetime, timezone as datetime_timezone
 from django.db import IntegrityError, connection, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -17,6 +19,8 @@ from rest_framework.status import (
     HTTP_204_NO_CONTENT,
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
+    HTTP_409_CONFLICT,
+    HTTP_502_BAD_GATEWAY,
     HTTP_503_SERVICE_UNAVAILABLE,
 )
 from rest_framework_simplejwt.exceptions import TokenError
@@ -26,20 +30,30 @@ from core.models import (
     Aspirante,
     EstadoReportePsicometrico,
     EstadoVacante,
+    HistorialReportePsicometrico,
+    OrigenReportePsicometrico,
     Postulacion,
     ReportePsicometrico,
     Sesion,
     Vacante,
 )
+from core.services.pagos import (
+    IdempotenciaEnConflicto,
+    PagoNoDisponible,
+    iniciar_pago_paypal,
+)
+from core.services.paypal import PaypalConfigurationError, PaypalError
 
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
+    CrearOrdenPagoPaypalSerializer,
     LoginSerializer,
     PerfilUpdateSerializer,
     PostulacionCrearSerializer,
     PostulacionSerializer,
     ReportePsicometricoSerializer,
+    OrdenPagoPaypalSerializer,
     RegistroSerializer,
     UsuarioSerializer,
     VacanteAdminSerializer,
@@ -60,6 +74,9 @@ def api_root(request):
             "postulaciones": reverse("api:postulacion-list", request=request),
             "reportes_psicometricos": reverse(
                 "api:reporte-psicometrico-list", request=request
+            ),
+            "crear_orden_paypal": reverse(
+                "api:crear-orden-paypal", request=request
             ),
             "vacantes": reverse("api:vacante-list", request=request),
         }
@@ -128,6 +145,28 @@ def abrir_sesion(usuario, request):
     return token_response(usuario, refresh)
 
 
+@swagger_auto_schema(
+    method="post",
+    request_body=CrearOrdenPagoPaypalSerializer,
+    manual_parameters=[
+        openapi.Parameter(
+            "Idempotency-Key",
+            openapi.IN_HEADER,
+            description="Clave opcional para reintentar la misma solicitud.",
+            type=openapi.TYPE_STRING,
+            max_length=128,
+        )
+    ],
+    responses={
+        200: OrdenPagoPaypalSerializer,
+        201: OrdenPagoPaypalSerializer,
+        202: OrdenPagoPaypalSerializer,
+        400: "Reporte inválido o no disponible.",
+        409: "Conflicto de idempotencia.",
+        502: "PayPal rechazó o no respondió la solicitud.",
+        503: "Credenciales de PayPal sin configurar.",
+    },
+)
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def login(request):
@@ -251,6 +290,57 @@ def cambiar_password(request):
     sesiones.update(revocada_en=timezone.now())
 
     return Response(status=HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def crear_orden_paypal(request):
+    """Reserva o reutiliza una orden y la crea en PayPal Orders v2."""
+    serializer = CrearOrdenPagoPaypalSerializer(
+        data=request.data,
+        context={"request": request},
+    )
+    serializer.is_valid(raise_exception=True)
+
+    clave_idempotencia = (request.headers.get("Idempotency-Key") or "").strip()
+    if len(clave_idempotencia) > 128:
+        return Response(
+            {"detail": "Idempotency-Key no puede superar 128 caracteres."},
+            status=HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        orden, nueva = iniciar_pago_paypal(
+            reporte=serializer.context["reporte"],
+            comprador=request.user,
+            clave_idempotencia=clave_idempotencia or None,
+            ip=request.META.get("REMOTE_ADDR"),
+            user_agent=request.META.get("HTTP_USER_AGENT"),
+        )
+    except IdempotenciaEnConflicto as error:
+        return Response({"detail": str(error)}, status=HTTP_409_CONFLICT)
+    except PagoNoDisponible as error:
+        return Response({"detail": str(error)}, status=HTTP_400_BAD_REQUEST)
+    except PaypalConfigurationError as error:
+        return Response(
+            {"detail": str(error), "code": error.code},
+            status=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except PaypalError as error:
+        return Response(
+            {"detail": str(error), "code": error.code},
+            status=HTTP_502_BAD_GATEWAY,
+        )
+
+    data = OrdenPagoPaypalSerializer(orden).data
+    data["reutilizada"] = not nueva
+    if nueva:
+        status_code = HTTP_201_CREATED
+    elif orden.estado == "PENDING":
+        status_code = 202
+    else:
+        status_code = HTTP_200_OK
+    return Response(data, status=status_code)
 
 
 class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
@@ -458,11 +548,12 @@ PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
 
 
 class PuedeSubirReportesPsicometricos(BasePermission):
-    """La consulta es personal; para subir hace falta uno de dos permisos.
+    """La consulta es personal; para escribir hace falta uno de dos permisos.
 
     El administrador archiva el informe de cualquier aspirante; el aspirante
     archiva el suyo. Quién es cada quien lo resuelve el serializer, que es
-    donde se conoce el expediente destino.
+    donde se conoce el expediente destino; y para retirar un documento, el
+    propio ViewSet.
     """
 
     message = "No tienes permiso para archivar reportes psicométricos."
@@ -478,6 +569,7 @@ class PuedeSubirReportesPsicometricos(BasePermission):
 
 class ReportePsicometricoViewSet(
     mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.ReadOnlyModelViewSet,
 ):
     """Carga administrativa y consulta privada de reportes externos."""
@@ -501,3 +593,39 @@ class ReportePsicometricoViewSet(
         return base.filter(aspirante__usuario=self.request.user).exclude(
             estado=EstadoReportePsicometrico.DESHABILITADO
         )
+
+    def perform_destroy(self, instance):
+        """Retira el documento del expediente sin borrar el rastro.
+
+        No se elimina la fila: el reporte pasa a `disabled` —que el queryset
+        ya excluye— y queda constancia de quién lo retiró. Un expediente que
+        pierde registros sin dejar huella no sirve para rendir cuentas, y el
+        archivo puede haberse cobrado.
+
+        Sólo se retira lo que subió la propia persona; los informes que aplicó
+        la plataforma los administra quien tiene el permiso de gestión.
+        """
+        permisos = permisos_de(self.request.user)
+        es_admin = PERMISO_ADMIN_REPORTES in permisos
+
+        if not es_admin and instance.origen != OrigenReportePsicometrico.PROPIA:
+            raise PermissionDenied(
+                "Sólo puedes retirar los informes que tú archivaste."
+            )
+
+        ahora = timezone.now()
+        with transaction.atomic():
+            ReportePsicometrico.objects.filter(pk=instance.pk).update(
+                estado=EstadoReportePsicometrico.DESHABILITADO,
+                disponible_para_compra=False,
+                actualizado_en=ahora,
+            )
+            HistorialReportePsicometrico.objects.create(
+                id=uuid.uuid4(),
+                reporte=instance,
+                accion="disabled",
+                realizado_por=self.request.user,
+                realizado_por_email=self.request.user.email,
+                metadata={"origen": instance.origen},
+                creado_en=ahora,
+            )

@@ -9,6 +9,7 @@ from .views import (
     VacantePublicaViewSet,
     api_root,
     cambiar_password,
+    crear_orden_paypal,
     health_check,
     login,
     logout,
@@ -40,5 +41,10 @@ urlpatterns = [
     path("auth/logout/", logout, name="logout"),
     path("auth/me/", usuario_actual, name="usuario-actual"),
     path("auth/password/", cambiar_password, name="cambiar-password"),
+    path(
+        "pagos/paypal/ordenes/",
+        crear_orden_paypal,
+        name="crear-orden-paypal",
+    ),
     path("", include(router.urls)),
 ]

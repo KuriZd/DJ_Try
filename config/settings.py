@@ -14,9 +14,15 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATABASE_SQL_DIR = BASE_DIR / 'database'
+
+# Configuración local de PayPal. Las variables definidas por el sistema tienen
+# prioridad y el archivo permanece fuera de Git mediante `.env.*`.
+load_dotenv(BASE_DIR / '.env.paypal', override=False)
 
 
 # Quick-start development settings - unsuitable for production
@@ -140,6 +146,27 @@ REPORTE_PSICOMETRICO_MONEDA = os.getenv('REPORTE_PSICOMETRICO_MONEDA', 'MXN')
 REPORTE_PSICOMETRICO_MAX_MB = int(
     os.getenv('REPORTE_PSICOMETRICO_MAX_MB', '10')
 )
+
+# PayPal REST API. El secreto nunca se expone al frontend ni se guarda en BD.
+PAYPAL_MODE = os.getenv('PAYPAL_MODE', 'sandbox').lower()
+PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID', '')
+PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET', '')
+PAYPAL_API_BASE_URL = (
+    'https://api-m.paypal.com'
+    if PAYPAL_MODE == 'live'
+    else 'https://api-m.sandbox.paypal.com'
+)
+PAYPAL_RETURN_URL = os.getenv(
+    'PAYPAL_RETURN_URL', 'http://localhost:5173/pagos/paypal/return'
+)
+PAYPAL_CANCEL_URL = os.getenv(
+    'PAYPAL_CANCEL_URL', 'http://localhost:5173/pagos/paypal/cancel'
+)
+PAYPAL_HTTP_TIMEOUT = float(os.getenv('PAYPAL_HTTP_TIMEOUT', '15'))
+PAYPAL_PENDING_TIMEOUT_MINUTES = int(
+    os.getenv('PAYPAL_PENDING_TIMEOUT_MINUTES', '5')
+)
+PAYPAL_ORDER_TTL_HOURS = int(os.getenv('PAYPAL_ORDER_TTL_HOURS', '3'))
 
 
 # Django REST Framework

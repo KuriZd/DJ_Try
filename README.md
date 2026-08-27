@@ -131,6 +131,40 @@ $env:REPORTE_PSICOMETRICO_MAX_MB="10"
 La descarga se habilitará únicamente después de que PayPal confirme el pago;
 esta primera etapa no publica una ruta directa al PDF.
 
+### Crear una orden de pago PayPal
+
+El aspirante autenticado inicia el pago de un reporte comercializable con:
+
+```http
+POST /api/pagos/paypal/ordenes/
+Authorization: Bearer <token>
+Idempotency-Key: <clave-opcional-de-hasta-128-caracteres>
+Content-Type: application/json
+```
+
+```json
+{
+  "reporte_id": "UUID_DEL_REPORTE"
+}
+```
+
+El monto y la moneda se leen del reporte almacenado por el backend; cualquier
+precio enviado por el cliente se ignora. Si ya existe una orden vigente para
+el comprador y reporte, la API la reutiliza en lugar de crear otra en PayPal.
+
+Credenciales y URLs requeridas para Sandbox:
+
+```powershell
+$env:PAYPAL_MODE="sandbox"
+$env:PAYPAL_CLIENT_ID="CLIENT_ID_SANDBOX"
+$env:PAYPAL_CLIENT_SECRET="CLIENT_SECRET_SANDBOX"
+$env:PAYPAL_RETURN_URL="http://localhost:5173/pagos/paypal/return"
+$env:PAYPAL_CANCEL_URL="http://localhost:5173/pagos/paypal/cancel"
+```
+
+`PAYPAL_CLIENT_SECRET` es exclusivo del backend y nunca debe enviarse al
+frontend ni guardarse en el repositorio.
+
 ## Documentación interactiva de la API
 
 El proyecto utiliza `drf-yasg` para generar y consultar la documentación

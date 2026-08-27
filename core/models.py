@@ -607,6 +607,8 @@ class ReportePsicometrico(TablaExistente):
     # completas, junto con su reporte.
     escalas = models.JSONField(default=list)
     paginas = models.IntegerField(null=True, blank=True)
+    # Nota libre de quien archiva: para que proceso fue, quien lo aplico.
+    notas = models.TextField(null=True, blank=True)
     disponible_para_compra = models.BooleanField(default=True)
     creado_en = models.DateTimeField()
     actualizado_en = models.DateTimeField()

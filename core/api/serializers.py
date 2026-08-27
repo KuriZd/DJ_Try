@@ -24,6 +24,7 @@ from core.models import (
     Postulacion,
     HistorialReportePsicometrico,
     OrigenReportePsicometrico,
+    OrdenPagoPaypal,
     ReportePsicometrico,
     Rol,
     Usuario,
@@ -1029,6 +1030,11 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
         source="aspirante.nombre_completo", read_only=True
     )
     archivo = serializers.FileField(write_only=True)
+    # Como se muestra en el expediente. Es opcional: quien no lo mande deja el
+    # nombre del archivo, que es de donde salia antes de que se pudiera editar.
+    nombre_original = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
     escalas = EscalasField(required=False)
 
     class Meta:
@@ -1054,6 +1060,7 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
             "nivel",
             "escalas",
             "paginas",
+            "notas",
             "disponible_para_compra",
             "creado_en",
             "actualizado_en",
@@ -1061,7 +1068,6 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "id",
             "aspirante_nombre",
-            "nombre_original",
             "mime_type",
             "tamano_bytes",
             "checksum_sha256",
@@ -1213,7 +1219,10 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
         reporte = ReportePsicometrico.objects.create(
             id=uuid.uuid4(),
             subido_por=usuario,
-            nombre_original=archivo.name[:255],
+            nombre_original=(
+                validated_data.pop("nombre_original", "").strip()
+                or archivo.name[:255]
+            ),
             mime_type="application/pdf",
             tamano_bytes=archivo.size,
             checksum_sha256=checksum.hexdigest(),
@@ -1256,3 +1265,51 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
             ]
         )
         return reporte
+
+
+class CrearOrdenPagoPaypalSerializer(serializers.Serializer):
+    reporte_id = serializers.UUIDField()
+
+    def validate_reporte_id(self, reporte_id):
+        try:
+            reporte = ReportePsicometrico.objects.select_related(
+                "aspirante"
+            ).get(pk=reporte_id)
+        except ReportePsicometrico.DoesNotExist:
+            raise serializers.ValidationError("El reporte no existe.")
+
+        usuario = self.context["request"].user
+        if reporte.aspirante.usuario_id != usuario.id:
+            # No confirmar a un usuario que existe el reporte de otra persona.
+            raise serializers.ValidationError("El reporte no existe.")
+        if (
+            reporte.estado != EstadoReportePsicometrico.DISPONIBLE
+            or reporte.origen != OrigenReportePsicometrico.PLATAFORMA
+            or not reporte.disponible_para_compra
+            or reporte.precio <= 0
+        ):
+            raise serializers.ValidationError(
+                "El reporte no está disponible para compra."
+            )
+        self.context["reporte"] = reporte
+        return reporte_id
+
+
+class OrdenPagoPaypalSerializer(serializers.ModelSerializer):
+    reporte_id = serializers.UUIDField(source="reporte.id", read_only=True)
+
+    class Meta:
+        model = OrdenPagoPaypal
+        fields = (
+            "referencia_interna",
+            "reporte_id",
+            "paypal_order_id",
+            "monto",
+            "moneda",
+            "estado",
+            "approval_url",
+            "expira_en",
+            "creado_en",
+            "actualizado_en",
+            "pagado_en",
+        )
