@@ -142,6 +142,40 @@ INSERT INTO catalogo_requisitos (clave, nombre) VALUES
   ('evaluacion', 'Evaluación aprobada'),
   ('asistencia', 'Asistencia acreditada');
 
+-- Paquetes psicométricos. Los tres cerrados y el de volumen. Los precios de
+-- este catálogo son los únicos que se cobran: la página no propone importes.
+INSERT INTO paquetes_psicometricos (
+  clave, nombre, descripcion, incluye,
+  cantidad_pruebas, precio_total,
+  cantidad_minima, cantidad_maxima, precio_unitario,
+  moneda, vigencia_meses, orden_visual
+) VALUES
+  (
+    'unica', 'Prueba única',
+    'Cuando ya sabes qué área quieres medir.',
+    '["La prueba que elijas", "Informe individual en 48 horas"]'::jsonb,
+    1, 890.00, NULL, NULL, NULL, 'MXN', NULL, 1
+  ),
+  (
+    'perfil', 'Perfil',
+    'Una lectura redonda de tu candidatura.',
+    '["Tres pruebas complementarias", "Informe comparado entre áreas", "Vigencia de 12 meses"]'::jsonb,
+    3, 2190.00, NULL, NULL, NULL, 'MXN', 12, 2
+  ),
+  (
+    'bateria', 'Batería completa',
+    'Las cinco áreas que evalúa el expediente.',
+    '["Las cinco áreas del perfil", "Informe ejecutivo para reclutamiento", "Vigencia de 12 meses"]'::jsonb,
+    5, 3290.00, NULL, NULL, NULL, 'MXN', 12, 3
+  ),
+  (
+    'medida', 'A tu medida',
+    'Elige cuántas pruebas necesitas y paga por volumen.',
+    '["Precio por volumen", "Vigencia de 12 meses"]'::jsonb,
+    NULL, NULL, 6, 30, 640.00, 'MXN', 12, 4
+  )
+ON CONFLICT (clave) DO NOTHING;
+
 INSERT INTO tipos_certificado (clave, nombre) VALUES
   ('participacion', 'Participación'),
   ('culminacion', 'Culminación'),
