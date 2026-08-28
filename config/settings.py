@@ -162,6 +162,10 @@ PAYPAL_RETURN_URL = os.getenv(
 PAYPAL_CANCEL_URL = os.getenv(
     'PAYPAL_CANCEL_URL', 'http://localhost:5173/pagos/paypal/cancel'
 )
+# Id del webhook dado de alta en el panel de PayPal. Sin el no se puede
+# comprobar la firma de un evento, y un evento sin comprobar no se procesa:
+# el endpoint es publico y cualquiera podria anunciar un cobro que no existe.
+PAYPAL_WEBHOOK_ID = os.getenv('PAYPAL_WEBHOOK_ID', '')
 PAYPAL_HTTP_TIMEOUT = float(os.getenv('PAYPAL_HTTP_TIMEOUT', '15'))
 PAYPAL_PENDING_TIMEOUT_MINUTES = int(
     os.getenv('PAYPAL_PENDING_TIMEOUT_MINUTES', '5')
