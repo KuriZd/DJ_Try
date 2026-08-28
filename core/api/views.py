@@ -8,7 +8,11 @@ from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import mixins, viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    permission_classes,
+)
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
@@ -19,6 +23,7 @@ from rest_framework.status import (
     HTTP_204_NO_CONTENT,
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
+    HTTP_404_NOT_FOUND,
     HTTP_409_CONFLICT,
     HTTP_502_BAD_GATEWAY,
     HTTP_503_SERVICE_UNAVAILABLE,
@@ -31,24 +36,35 @@ from core.models import (
     EstadoReportePsicometrico,
     EstadoVacante,
     HistorialReportePsicometrico,
+    OrdenPagoPaypal,
     OrigenReportePsicometrico,
+    PaquetePsicometrico,
     Postulacion,
     ReportePsicometrico,
     Sesion,
     Vacante,
 )
 from core.services.pagos import (
+    CapturaNoAplicable,
+    FirmaWebhookInvalida,
     IdempotenciaEnConflicto,
+    MontoCapturadoDistinto,
     PagoNoDisponible,
+    cancelar_pago_paypal,
+    capturar_pago_paypal,
+    iniciar_pago_paquete,
     iniciar_pago_paypal,
+    procesar_evento_paypal,
 )
 from core.services.paypal import PaypalConfigurationError, PaypalError
 
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
+    CapturarOrdenPagoPaypalSerializer,
     CrearOrdenPagoPaypalSerializer,
     LoginSerializer,
+    PaquetePsicometricoSerializer,
     PerfilUpdateSerializer,
     PostulacionCrearSerializer,
     PostulacionSerializer,
@@ -75,9 +91,11 @@ def api_root(request):
             "reportes_psicometricos": reverse(
                 "api:reporte-psicometrico-list", request=request
             ),
-            "crear_orden_paypal": reverse(
-                "api:crear-orden-paypal", request=request
+            "paquetes_psicometricos": reverse(
+                "api:paquete-psicometrico-list", request=request
             ),
+            "ordenes_paypal": reverse("api:ordenes-paypal", request=request),
+            "webhook_paypal": reverse("api:webhook-paypal", request=request),
             "vacantes": reverse("api:vacante-list", request=request),
         }
     )
@@ -145,28 +163,6 @@ def abrir_sesion(usuario, request):
     return token_response(usuario, refresh)
 
 
-@swagger_auto_schema(
-    method="post",
-    request_body=CrearOrdenPagoPaypalSerializer,
-    manual_parameters=[
-        openapi.Parameter(
-            "Idempotency-Key",
-            openapi.IN_HEADER,
-            description="Clave opcional para reintentar la misma solicitud.",
-            type=openapi.TYPE_STRING,
-            max_length=128,
-        )
-    ],
-    responses={
-        200: OrdenPagoPaypalSerializer,
-        201: OrdenPagoPaypalSerializer,
-        202: OrdenPagoPaypalSerializer,
-        400: "Reporte inválido o no disponible.",
-        409: "Conflicto de idempotencia.",
-        502: "PayPal rechazó o no respondió la solicitud.",
-        503: "Credenciales de PayPal sin configurar.",
-    },
-)
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def login(request):
@@ -292,10 +288,69 @@ def cambiar_password(request):
     return Response(status=HTTP_204_NO_CONTENT)
 
 
-@api_view(["POST"])
+IDEMPOTENCY_KEY_PARAM = openapi.Parameter(
+    "Idempotency-Key",
+    openapi.IN_HEADER,
+    description="Clave opcional para reintentar la misma solicitud.",
+    type=openapi.TYPE_STRING,
+    max_length=128,
+)
+
+
+def _respuesta_de_error_paypal(error):
+    """Traduce un fallo de PayPal al codigo HTTP que le toca.
+
+    Una credencial sin configurar es culpa nuestra y se puede reintentar mas
+    tarde (503); que PayPal rechace o no conteste es un problema del proveedor
+    (502). Al cliente le sirve distinguirlos: uno se reintenta, el otro no.
+    """
+    if isinstance(error, PaypalConfigurationError):
+        return Response(
+            {"detail": str(error), "code": error.code},
+            status=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return Response(
+        {"detail": str(error), "code": error.code},
+        status=HTTP_502_BAD_GATEWAY,
+    )
+
+
+def _ordenes_del_usuario(usuario):
+    return (
+        OrdenPagoPaypal.objects.select_related("compra")
+        .filter(comprador=usuario)
+        .order_by("-creado_en")
+    )
+
+
+@swagger_auto_schema(
+    method="post",
+    request_body=CrearOrdenPagoPaypalSerializer,
+    manual_parameters=[IDEMPOTENCY_KEY_PARAM],
+    responses={
+        200: OrdenPagoPaypalSerializer,
+        201: OrdenPagoPaypalSerializer,
+        202: OrdenPagoPaypalSerializer,
+        400: "Reporte o paquete inválido o no disponible.",
+        409: "Conflicto de idempotencia.",
+        502: "PayPal rechazó o no respondió la solicitud.",
+        503: "Credenciales de PayPal sin configurar.",
+    },
+)
+@swagger_auto_schema(
+    method="get", responses={200: OrdenPagoPaypalSerializer(many=True)}
+)
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
-def crear_orden_paypal(request):
-    """Reserva o reutiliza una orden y la crea en PayPal Orders v2."""
+def ordenes_paypal(request):
+    """Órdenes de pago de quien entra: consultarlas o abrir una nueva."""
+    if request.method == "GET":
+        return Response(
+            OrdenPagoPaypalSerializer(
+                _ordenes_del_usuario(request.user), many=True
+            ).data
+        )
+
     serializer = CrearOrdenPagoPaypalSerializer(
         data=request.data,
         context={"request": request},
@@ -309,28 +364,30 @@ def crear_orden_paypal(request):
             status=HTTP_400_BAD_REQUEST,
         )
 
+    comun = {
+        "comprador": request.user,
+        "clave_idempotencia": clave_idempotencia or None,
+        "ip": request.META.get("REMOTE_ADDR"),
+        "user_agent": request.META.get("HTTP_USER_AGENT"),
+    }
+
     try:
-        orden, nueva = iniciar_pago_paypal(
-            reporte=serializer.context["reporte"],
-            comprador=request.user,
-            clave_idempotencia=clave_idempotencia or None,
-            ip=request.META.get("REMOTE_ADDR"),
-            user_agent=request.META.get("HTTP_USER_AGENT"),
-        )
+        if "paquete" in serializer.context:
+            orden, nueva = iniciar_pago_paquete(
+                paquete=serializer.context["paquete"],
+                cantidad=serializer.validated_data.get("cantidad"),
+                **comun,
+            )
+        else:
+            orden, nueva = iniciar_pago_paypal(
+                reporte=serializer.context["reporte"], **comun
+            )
     except IdempotenciaEnConflicto as error:
         return Response({"detail": str(error)}, status=HTTP_409_CONFLICT)
     except PagoNoDisponible as error:
         return Response({"detail": str(error)}, status=HTTP_400_BAD_REQUEST)
-    except PaypalConfigurationError as error:
-        return Response(
-            {"detail": str(error), "code": error.code},
-            status=HTTP_503_SERVICE_UNAVAILABLE,
-        )
     except PaypalError as error:
-        return Response(
-            {"detail": str(error), "code": error.code},
-            status=HTTP_502_BAD_GATEWAY,
-        )
+        return _respuesta_de_error_paypal(error)
 
     data = OrdenPagoPaypalSerializer(orden).data
     data["reutilizada"] = not nueva
@@ -341,6 +398,174 @@ def crear_orden_paypal(request):
     else:
         status_code = HTTP_200_OK
     return Response(data, status=status_code)
+
+
+@swagger_auto_schema(
+    method="get",
+    responses={200: OrdenPagoPaypalSerializer, 404: "La orden no existe."},
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def orden_paypal(request, referencia):
+    """Estado de una orden propia, por su referencia interna."""
+    orden = _ordenes_del_usuario(request.user).filter(
+        referencia_interna=referencia
+    ).first()
+    if orden is None:
+        # 404 y no 403: confirmar que existe la orden de otra persona ya diria
+        # de mas.
+        return Response(
+            {"detail": "La orden no existe."}, status=HTTP_404_NOT_FOUND
+        )
+    return Response(OrdenPagoPaypalSerializer(orden).data)
+
+
+@swagger_auto_schema(
+    method="post",
+    request_body=CapturarOrdenPagoPaypalSerializer,
+    responses={
+        200: OrdenPagoPaypalSerializer,
+        400: "La orden no existe.",
+        409: "La orden no está en condiciones de cobrarse.",
+        502: "PayPal rechazó o no respondió el cobro.",
+        503: "Credenciales de PayPal sin configurar.",
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def capturar_orden_paypal(request):
+    """Cobra la orden con la que PayPal devolvió a la persona.
+
+    Es idempotente a propósito: recargar la página de retorno vuelve a pasar
+    por aquí y debe contestar lo mismo, no cobrar de nuevo. `cobrada_ahora`
+    distingue el cobro real de la repetición.
+    """
+    serializer = CapturarOrdenPagoPaypalSerializer(
+        data=request.data, context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+
+    try:
+        orden, cobrada_ahora = capturar_pago_paypal(
+            orden=serializer.context["orden"]
+        )
+    except CapturaNoAplicable as error:
+        return Response({"detail": str(error)}, status=HTTP_409_CONFLICT)
+    except MontoCapturadoDistinto as error:
+        return Response(
+            {"detail": str(error), "code": "MONTO_CAPTURADO_DISTINTO"},
+            status=HTTP_409_CONFLICT,
+        )
+    except PaypalError as error:
+        return _respuesta_de_error_paypal(error)
+
+    data = OrdenPagoPaypalSerializer(orden).data
+    data["cobrada_ahora"] = cobrada_ahora
+    return Response(data, status=HTTP_200_OK)
+
+
+@swagger_auto_schema(
+    method="post",
+    request_body=CapturarOrdenPagoPaypalSerializer,
+    responses={200: OrdenPagoPaypalSerializer, 400: "La orden no existe."},
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cancelar_orden_paypal(request):
+    """Cierra la orden que la persona abandonó en PayPal.
+
+    Una orden ya cobrada no se toca: pasar por la URL de cancelación después
+    de haber pagado es un caso real y no puede deshacer el cobro.
+    """
+    serializer = CapturarOrdenPagoPaypalSerializer(
+        data=request.data, context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+
+    orden, cancelada_ahora = cancelar_pago_paypal(
+        orden=serializer.context["orden"]
+    )
+    data = OrdenPagoPaypalSerializer(orden).data
+    data["cancelada_ahora"] = cancelada_ahora
+    return Response(data, status=HTTP_200_OK)
+
+
+# Cabeceras con las que PayPal firma cada aviso. Los nombres van tal cual los
+# manda; `request.headers` no distingue mayusculas.
+CABECERAS_FIRMA_WEBHOOK = {
+    "auth_algo": "PayPal-Auth-Algo",
+    "cert_url": "PayPal-Cert-Url",
+    "transmission_id": "PayPal-Transmission-Id",
+    "transmission_sig": "PayPal-Transmission-Sig",
+    "transmission_time": "PayPal-Transmission-Time",
+}
+
+
+@swagger_auto_schema(
+    method="post",
+    responses={
+        200: "Evento atendido, duplicado, ignorado o archivado sin efecto.",
+        400: "La firma no es de PayPal.",
+        503: "No se pudo verificar la firma; PayPal debe reintentar.",
+    },
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def webhook_paypal(request):
+    """Avisos de PayPal sobre el ciclo de vida de un cobro.
+
+    Es el único endpoint público que mueve dinero, así que lo primero que hace
+    es comprobar la firma y lo hace **cerrado**: si no se puede verificar, no
+    se procesa. Sin eso, cualquiera podría anunciar un cobro inexistente y
+    llevarse la mercancía.
+
+    Los códigos de salida están elegidos por cómo reintenta PayPal —insiste
+    mientras no reciba un 2xx—:
+
+    - 200 en todo lo que ya está resuelto, incluidos los duplicados y los
+      eventos que no atendemos. Reintentarlos daría siempre lo mismo.
+    - 400 cuando la firma no cuadra: no queremos que insista.
+    - 503 cuando el fallo es nuestro o de la red. Ahí sí conviene que vuelva.
+    """
+    cabeceras = {
+        clave: request.headers.get(nombre)
+        for clave, nombre in CABECERAS_FIRMA_WEBHOOK.items()
+    }
+
+    try:
+        resultado = procesar_evento_paypal(
+            evento=request.data, cabeceras=cabeceras
+        )
+    except FirmaWebhookInvalida as error:
+        return Response({"detail": str(error)}, status=HTTP_400_BAD_REQUEST)
+    except PaypalError as error:
+        # Incluye la configuración ausente: sin poder verificar, el evento se
+        # queda sin atender y PayPal lo reintenta cuando esté arreglado.
+        return Response(
+            {"detail": str(error), "code": error.code},
+            status=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return Response({"resultado": resultado}, status=HTTP_200_OK)
+
+
+class PaquetePsicometricoViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Catálogo de paquetes.
+
+    Es público y de sólo lectura: la página de precios lo lee sin sesión, y
+    los importes que muestra son los mismos que se van a cobrar porque salen
+    de aquí.
+    """
+
+    serializer_class = PaquetePsicometricoSerializer
+    permission_classes = [AllowAny]
+    lookup_field = "clave"
+    queryset = PaquetePsicometrico.objects.filter(activo=True).order_by(
+        "orden_visual", "clave"
+    )
 
 
 class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
