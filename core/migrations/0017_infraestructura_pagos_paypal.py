@@ -2,7 +2,7 @@ from django.db import migrations
 
 
 CREAR_PAGOS_PAYPAL_SQL = """
-CREATE TABLE ordenes_pago_paypal (
+CREATE TABLE IF NOT EXISTS ordenes_pago_paypal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   referencia_interna VARCHAR(50) NOT NULL UNIQUE,
   comprador_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
@@ -31,18 +31,18 @@ CREATE TABLE ordenes_pago_paypal (
   CHECK (estado <> 'COMPLETED' OR pagado_en IS NOT NULL)
 );
 
-CREATE UNIQUE INDEX orden_pago_paypal_activa_unica
+CREATE UNIQUE INDEX IF NOT EXISTS orden_pago_paypal_activa_unica
   ON ordenes_pago_paypal (comprador_id, reporte_id)
   WHERE estado IN ('PENDING', 'CREATED', 'APPROVED', 'COMPLETED');
 
-CREATE UNIQUE INDEX orden_pago_paypal_idempotencia_unica
+CREATE UNIQUE INDEX IF NOT EXISTS orden_pago_paypal_idempotencia_unica
   ON ordenes_pago_paypal (comprador_id, clave_idempotencia)
   WHERE clave_idempotencia IS NOT NULL;
 
-CREATE INDEX ordenes_pago_paypal_reporte_idx
+CREATE INDEX IF NOT EXISTS ordenes_pago_paypal_reporte_idx
   ON ordenes_pago_paypal (reporte_id, creado_en DESC);
 
-CREATE TABLE transacciones_pago_paypal (
+CREATE TABLE IF NOT EXISTS transacciones_pago_paypal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   orden_id UUID NOT NULL REFERENCES ordenes_pago_paypal(id) ON DELETE RESTRICT,
   tipo VARCHAR(20) NOT NULL CHECK (tipo IN ('CAPTURE', 'REFUND')),
@@ -66,14 +66,14 @@ CREATE TABLE transacciones_pago_paypal (
   )
 );
 
-CREATE INDEX transacciones_pago_paypal_orden_idx
+CREATE INDEX IF NOT EXISTS transacciones_pago_paypal_orden_idx
   ON transacciones_pago_paypal (orden_id, creado_en);
 
-CREATE UNIQUE INDEX transaccion_captura_paypal_unica
+CREATE UNIQUE INDEX IF NOT EXISTS transaccion_captura_paypal_unica
   ON transacciones_pago_paypal (paypal_capture_id)
   WHERE tipo = 'CAPTURE' AND paypal_capture_id IS NOT NULL;
 
-CREATE TABLE eventos_pago_paypal (
+CREATE TABLE IF NOT EXISTS eventos_pago_paypal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   orden_id UUID REFERENCES ordenes_pago_paypal(id) ON DELETE SET NULL,
   transaccion_id UUID REFERENCES transacciones_pago_paypal(id) ON DELETE SET NULL,
@@ -90,10 +90,10 @@ CREATE TABLE eventos_pago_paypal (
   creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX eventos_pago_paypal_orden_idx
+CREATE INDEX IF NOT EXISTS eventos_pago_paypal_orden_idx
   ON eventos_pago_paypal (orden_id, creado_en);
 
-CREATE INDEX eventos_pago_paypal_pendientes_idx
+CREATE INDEX IF NOT EXISTS eventos_pago_paypal_pendientes_idx
   ON eventos_pago_paypal (recibido_en)
   WHERE procesado = false;
 """
