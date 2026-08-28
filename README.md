@@ -142,28 +142,77 @@ Idempotency-Key: <clave-opcional-de-hasta-128-caracteres>
 Content-Type: application/json
 ```
 
+Se cobra una de dos cosas, nunca las dos:
+
 ```json
-{
-  "reporte_id": "UUID_DEL_REPORTE"
-}
+{ "reporte_id": "UUID_DEL_REPORTE" }
 ```
 
-El monto y la moneda se leen del reporte almacenado por el backend; cualquier
-precio enviado por el cliente se ignora. Si ya existe una orden vigente para
-el comprador y reporte, la API la reutiliza en lugar de crear otra en PayPal.
+```json
+{ "paquete_clave": "perfil" }
+{ "paquete_clave": "medida", "cantidad": 8 }
+```
 
-Credenciales y URLs requeridas para Sandbox:
+El monto y la moneda salen del backend —del reporte almacenado o del catálogo
+de `GET /api/paquetes-psicometricos/`—; cualquier precio enviado por el cliente
+se ignora. Si ya existe una orden vigente para el comprador y reporte, la API
+la reutiliza en lugar de crear otra en PayPal. Para un paquete, que sí se puede
+comprar varias veces, esa reutilización solo ocurre con `Idempotency-Key`.
+
+### Cobrar y cerrar la orden
+
+```http
+POST /api/pagos/paypal/ordenes/capturar/   { "paypal_order_id": "..." }
+POST /api/pagos/paypal/ordenes/cancelar/   { "paypal_order_id": "..." }
+GET  /api/pagos/paypal/ordenes/            (las del usuario)
+GET  /api/pagos/paypal/ordenes/{referencia}/
+```
+
+`paypal_order_id` es el `?token=` con el que PayPal devuelve a la persona.
+La captura es idempotente: repetirla no cobra dos veces, y `cobrada_ahora`
+distingue el cobro real de la repetición. Antes de entregar nada se comprueba
+que el importe cobrado sea el de la orden; si no cuadra, la orden queda
+marcada para revisión y responde 409.
+
+### Webhook
+
+```http
+POST /api/pagos/paypal/webhook/
+```
+
+Es público —PayPal no trae credenciales nuestras—, así que lo que autentica
+cada aviso es su firma. Se verifica contra `PAYPAL_WEBHOOK_ID` y **falla
+cerrado**: sin poder verificar, no se procesa.
+
+Atiende `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `.PENDING`,
+`.DENIED`, `.REFUNDED` y `.REVERSED`. Resuelve dos huecos que el navegador no
+puede cerrar: un cobro que PayPal retuvo para revisión y libera después, y una
+orden aprobada cuyo navegador murió antes de cobrar.
+
+Los códigos van elegidos por cómo reintenta PayPal (insiste hasta recibir un
+2xx): 200 para lo ya resuelto —duplicados y eventos que no atendemos
+incluidos—, 400 si la firma no cuadra, y 503 cuando el fallo es nuestro o de
+la red.
+
+Para probarlo en local hace falta una URL pública (`ngrok`, `cloudflared`) y
+dar de alta el webhook en el panel de PayPal con esa URL; el panel devuelve el
+id que va en `PAYPAL_WEBHOOK_ID`.
+
+### Configuración
 
 ```powershell
 $env:PAYPAL_MODE="sandbox"
 $env:PAYPAL_CLIENT_ID="CLIENT_ID_SANDBOX"
 $env:PAYPAL_CLIENT_SECRET="CLIENT_SECRET_SANDBOX"
+$env:PAYPAL_WEBHOOK_ID="WH-XXXXXXXXXXXX"
 $env:PAYPAL_RETURN_URL="http://localhost:5173/pagos/paypal/return"
 $env:PAYPAL_CANCEL_URL="http://localhost:5173/pagos/paypal/cancel"
 ```
 
 `PAYPAL_CLIENT_SECRET` es exclusivo del backend y nunca debe enviarse al
-frontend ni guardarse en el repositorio.
+frontend ni guardarse en el repositorio. El `PAYPAL_CLIENT_ID` sí viaja al
+navegador (va en la URL del SDK) y el frontend lo lee de
+`VITE_PAYPAL_CLIENT_ID`.
 
 ## Documentación interactiva de la API
 
