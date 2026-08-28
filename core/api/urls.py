@@ -3,17 +3,24 @@ from rest_framework.routers import SimpleRouter
 
 from .views import (
     AspiranteViewSet,
+    PaquetePsicometricoViewSet,
     PostulacionViewSet,
+    ReportePsicometricoViewSet,
     VacanteAdminViewSet,
     VacantePublicaViewSet,
     api_root,
     cambiar_password,
+    cancelar_orden_paypal,
+    capturar_orden_paypal,
     health_check,
     login,
     logout,
+    orden_paypal,
+    ordenes_paypal,
     refresh_token,
     registro,
     usuario_actual,
+    webhook_paypal,
 )
 
 
@@ -22,6 +29,16 @@ app_name = "api"
 router = SimpleRouter()
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
+router.register(
+    "paquetes-psicometricos",
+    PaquetePsicometricoViewSet,
+    basename="paquete-psicometrico",
+)
+router.register(
+    "reportes-psicometricos",
+    ReportePsicometricoViewSet,
+    basename="reporte-psicometrico",
+)
 router.register("vacantes", VacantePublicaViewSet, basename="vacante")
 router.register("admin/vacantes", VacanteAdminViewSet, basename="vacante-admin")
 
@@ -34,5 +51,24 @@ urlpatterns = [
     path("auth/logout/", logout, name="logout"),
     path("auth/me/", usuario_actual, name="usuario-actual"),
     path("auth/password/", cambiar_password, name="cambiar-password"),
+    path("pagos/paypal/ordenes/", ordenes_paypal, name="ordenes-paypal"),
+    # Las rutas literales van antes que la de referencia: si no, "capturar"
+    # entraria como si fuera el nombre de una orden.
+    path(
+        "pagos/paypal/ordenes/capturar/",
+        capturar_orden_paypal,
+        name="capturar-orden-paypal",
+    ),
+    path(
+        "pagos/paypal/ordenes/cancelar/",
+        cancelar_orden_paypal,
+        name="cancelar-orden-paypal",
+    ),
+    path(
+        "pagos/paypal/ordenes/<str:referencia>/",
+        orden_paypal,
+        name="orden-paypal",
+    ),
+    path("pagos/paypal/webhook/", webhook_paypal, name="webhook-paypal"),
     path("", include(router.urls)),
 ]

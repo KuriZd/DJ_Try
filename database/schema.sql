@@ -274,6 +274,265 @@ CREATE TABLE documentos_aspirante (
   subido_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Reportes psicometricos generados por un sistema externo y almacenados de
+-- forma privada hasta que el backend confirme su pago.
+CREATE TABLE reportes_psicometricos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  aspirante_id VARCHAR(30) NOT NULL REFERENCES aspirantes(id) ON DELETE RESTRICT,
+  subido_por_id UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  referencia_evaluacion_externa VARCHAR(180),
+  nombre_original VARCHAR(255) NOT NULL,
+  archivo_clave TEXT NOT NULL,
+  mime_type VARCHAR(100) NOT NULL DEFAULT 'application/pdf',
+  tamano_bytes BIGINT NOT NULL CHECK (tamano_bytes > 0),
+  checksum_sha256 CHAR(64) NOT NULL,
+  precio NUMERIC(12,2) NOT NULL CHECK (precio >= 0),
+  moneda CHAR(3) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'available'
+    CHECK (estado IN ('available', 'replaced', 'disabled')),
+  -- Quien produjo el documento. Lo que sube el propio aspirante no se
+  -- comercializa, por eso el origen decide disponible_para_compra.
+  origen VARCHAR(20) NOT NULL DEFAULT 'plataforma'
+    CHECK (origen IN ('plataforma', 'propia')),
+  -- Metadatos de la evaluacion: sin ellos el reporte es un PDF suelto y no
+  -- se puede agrupar por area, ni saber si sigue vigente, ni leer el perfil.
+  area_clave VARCHAR(40) NOT NULL DEFAULT 'otra',
+  aplicada_en TIMESTAMPTZ,
+  vigente_hasta TIMESTAMPTZ,
+  puntaje SMALLINT CHECK (puntaje IS NULL OR (puntaje >= 0 AND puntaje <= 100)),
+  nivel VARCHAR(40),
+  -- Lista de {"nombre": str, "puntaje": int}: las escalas cambian con cada
+  -- instrumento y solo se leen completas, junto con su reporte.
+  escalas JSONB NOT NULL DEFAULT '[]'::jsonb,
+  paginas INTEGER CHECK (paginas IS NULL OR paginas >= 0),
+  -- Nota libre de quien archiva el documento.
+  notas TEXT,
+  disponible_para_compra BOOLEAN NOT NULL DEFAULT true,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT reporte_psicometrico_vigencia_coherente CHECK (
+    vigente_hasta IS NULL
+    OR aplicada_en IS NULL
+    OR vigente_hasta >= aplicada_en
+  )
+);
+
+CREATE INDEX reportes_psicometricos_aspirante_idx
+  ON reportes_psicometricos (aspirante_id, creado_en DESC);
+
+CREATE INDEX reportes_psicometricos_area_idx
+  ON reportes_psicometricos (aspirante_id, area_clave, aplicada_en DESC);
+
+-- El expediente conserva un reporte por evaluacion aplicada. Lo que no se
+-- permite es duplicar la MISMA evaluacion externa con dos vigentes.
+CREATE UNIQUE INDEX reporte_psicometrico_evaluacion_unico
+  ON reportes_psicometricos (aspirante_id, referencia_evaluacion_externa)
+  WHERE estado = 'available' AND referencia_evaluacion_externa IS NOT NULL;
+
+CREATE TABLE historial_reportes_psicometricos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reporte_id UUID NOT NULL REFERENCES reportes_psicometricos(id) ON DELETE CASCADE,
+  accion VARCHAR(50) NOT NULL,
+  realizado_por_id UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  realizado_por_email VARCHAR(254),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX historial_reportes_psicometricos_idx
+  ON historial_reportes_psicometricos (reporte_id, creado_en);
+
+-- Catalogo de paquetes psicometricos. El precio vive aqui y no en el
+-- frontend: es el unico numero que puede cobrarse, y el cliente no puede
+-- proponerlo.
+--
+-- Una fila describe un paquete cerrado (cantidad y total fijos) o uno a la
+-- medida (el comprador elige la cantidad dentro del rango y el total sale de
+-- multiplicar por el precio unitario). El CHECK impide filas a medias.
+CREATE TABLE paquetes_psicometricos (
+  clave VARCHAR(40) PRIMARY KEY,
+  nombre VARCHAR(120) NOT NULL,
+  descripcion TEXT,
+  incluye JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cantidad_pruebas SMALLINT CHECK (cantidad_pruebas > 0),
+  precio_total NUMERIC(12,2) CHECK (precio_total > 0),
+  cantidad_minima SMALLINT CHECK (cantidad_minima > 0),
+  cantidad_maxima SMALLINT CHECK (cantidad_maxima > 0),
+  precio_unitario NUMERIC(12,2) CHECK (precio_unitario > 0),
+  moneda CHAR(3) NOT NULL DEFAULT 'MXN' CHECK (moneda ~ '^[A-Z]{3}$'),
+  vigencia_meses SMALLINT CHECK (vigencia_meses IS NULL OR vigencia_meses > 0),
+  activo BOOLEAN NOT NULL DEFAULT true,
+  orden_visual SMALLINT NOT NULL DEFAULT 0,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT paquete_psicometrico_forma_valida CHECK (
+    (
+      cantidad_pruebas IS NOT NULL
+      AND precio_total IS NOT NULL
+      AND cantidad_minima IS NULL
+      AND cantidad_maxima IS NULL
+      AND precio_unitario IS NULL
+    )
+    OR (
+      cantidad_pruebas IS NULL
+      AND precio_total IS NULL
+      AND cantidad_minima IS NOT NULL
+      AND cantidad_maxima IS NOT NULL
+      AND precio_unitario IS NOT NULL
+      AND cantidad_maxima >= cantidad_minima
+    )
+  )
+);
+
+CREATE INDEX paquetes_psicometricos_visibles_idx
+  ON paquetes_psicometricos (orden_visual, clave)
+  WHERE activo;
+
+-- Compra de un paquete. Se crea al reservar la orden, en PENDIENTE, y pasa a
+-- PAGADA cuando PayPal confirma la captura. Guarda una fotografia del nombre
+-- y del precio: el catalogo cambia y el comprobante no puede cambiar con el.
+CREATE TABLE compras_paquete_psicometrico (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  comprador_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
+  paquete_clave VARCHAR(40) NOT NULL
+    REFERENCES paquetes_psicometricos(clave) ON DELETE RESTRICT,
+  paquete_nombre VARCHAR(120) NOT NULL,
+  cantidad_pruebas SMALLINT NOT NULL CHECK (cantidad_pruebas > 0),
+  precio_unitario NUMERIC(12,2) CHECK (precio_unitario > 0),
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
+  moneda CHAR(3) NOT NULL CHECK (moneda ~ '^[A-Z]{3}$'),
+  estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE'
+    CHECK (estado IN ('PENDIENTE', 'PAGADA', 'CANCELADA', 'REEMBOLSADA')),
+  creditos_totales SMALLINT NOT NULL CHECK (creditos_totales > 0),
+  creditos_consumidos SMALLINT NOT NULL DEFAULT 0
+    CHECK (creditos_consumidos >= 0),
+  vigente_hasta TIMESTAMPTZ,
+  pagada_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT compra_paquete_creditos_coherentes
+    CHECK (creditos_consumidos <= creditos_totales),
+  CONSTRAINT compra_paquete_pagada_con_fecha
+    CHECK (estado <> 'PAGADA' OR pagada_en IS NOT NULL)
+);
+
+CREATE INDEX compras_paquete_comprador_idx
+  ON compras_paquete_psicometrico (comprador_id, creado_en DESC);
+
+-- Para resolver "cuantas pruebas le quedan" sin recorrer todo el historial.
+CREATE INDEX compras_paquete_con_saldo_idx
+  ON compras_paquete_psicometrico (comprador_id)
+  WHERE estado = 'PAGADA' AND creditos_consumidos < creditos_totales;
+
+-- Pagos PayPal. La orden conserva una fotografia del precio y de la
+-- referencia de evaluacion usada al iniciar el cobro.
+CREATE TABLE ordenes_pago_paypal (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  referencia_interna VARCHAR(50) NOT NULL UNIQUE,
+  comprador_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
+  reporte_id UUID REFERENCES reportes_psicometricos(id) ON DELETE RESTRICT,
+  compra_id UUID REFERENCES compras_paquete_psicometrico(id) ON DELETE RESTRICT,
+  referencia_evaluacion_externa VARCHAR(180),
+  paypal_order_id VARCHAR(64) UNIQUE,
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
+  moneda CHAR(3) NOT NULL CHECK (moneda ~ '^[A-Z]{3}$'),
+  estado VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+    CHECK (estado IN (
+      'PENDING', 'CREATED', 'APPROVED', 'COMPLETED',
+      'FAILED', 'CANCELLED', 'REFUNDED'
+    )),
+  clave_idempotencia VARCHAR(128),
+  approval_url TEXT,
+  paypal_request_id VARCHAR(64),
+  respuesta_proveedor JSONB NOT NULL DEFAULT '{}'::jsonb,
+  codigo_error VARCHAR(100),
+  mensaje_error TEXT,
+  ip INET,
+  user_agent TEXT,
+  expira_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  pagado_en TIMESTAMPTZ,
+  CHECK (estado <> 'COMPLETED' OR pagado_en IS NOT NULL),
+  CONSTRAINT orden_pago_paypal_objeto_unico
+    CHECK (num_nonnulls(reporte_id, compra_id) = 1)
+);
+
+CREATE UNIQUE INDEX orden_pago_paypal_activa_unica
+  ON ordenes_pago_paypal (comprador_id, reporte_id)
+  WHERE estado IN ('PENDING', 'CREATED', 'APPROVED', 'COMPLETED');
+
+CREATE UNIQUE INDEX orden_pago_paypal_idempotencia_unica
+  ON ordenes_pago_paypal (comprador_id, clave_idempotencia)
+  WHERE clave_idempotencia IS NOT NULL;
+
+CREATE INDEX ordenes_pago_paypal_reporte_idx
+  ON ordenes_pago_paypal (reporte_id, creado_en DESC);
+
+-- El indice de orden activa por reporte no cubre las de paquete: en un indice
+-- unico los NULL no chocan entre si. Cada compra lleva su propia orden.
+CREATE UNIQUE INDEX orden_pago_paypal_compra_activa_unica
+  ON ordenes_pago_paypal (compra_id)
+  WHERE compra_id IS NOT NULL
+    AND estado IN ('PENDING', 'CREATED', 'APPROVED', 'COMPLETED');
+
+CREATE TABLE transacciones_pago_paypal (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  orden_id UUID NOT NULL REFERENCES ordenes_pago_paypal(id) ON DELETE RESTRICT,
+  tipo VARCHAR(20) NOT NULL CHECK (tipo IN ('CAPTURE', 'REFUND')),
+  paypal_capture_id VARCHAR(64),
+  paypal_refund_id VARCHAR(64) UNIQUE,
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
+  moneda CHAR(3) NOT NULL CHECK (moneda ~ '^[A-Z]{3}$'),
+  estado VARCHAR(20) NOT NULL CHECK (estado IN (
+    'PENDING', 'CREATED', 'APPROVED', 'COMPLETED',
+    'FAILED', 'CANCELLED', 'REFUNDED'
+  )),
+  comision NUMERIC(12,2) CHECK (comision IS NULL OR comision >= 0),
+  monto_neto NUMERIC(12,2),
+  respuesta_proveedor JSONB NOT NULL DEFAULT '{}'::jsonb,
+  procesada_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (tipo = 'CAPTURE' AND paypal_refund_id IS NULL)
+    OR (tipo = 'REFUND' AND paypal_capture_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX transacciones_pago_paypal_orden_idx
+  ON transacciones_pago_paypal (orden_id, creado_en);
+
+CREATE UNIQUE INDEX transaccion_captura_paypal_unica
+  ON transacciones_pago_paypal (paypal_capture_id)
+  WHERE tipo = 'CAPTURE' AND paypal_capture_id IS NOT NULL;
+
+-- Registro append-only de intentos de API, transiciones y webhooks. El id de
+-- evento de PayPal evita procesar dos veces el mismo webhook.
+CREATE TABLE eventos_pago_paypal (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  orden_id UUID REFERENCES ordenes_pago_paypal(id) ON DELETE SET NULL,
+  transaccion_id UUID REFERENCES transacciones_pago_paypal(id) ON DELETE SET NULL,
+  paypal_event_id VARCHAR(100) UNIQUE,
+  tipo_evento VARCHAR(100) NOT NULL,
+  origen VARCHAR(20) NOT NULL CHECK (origen IN ('API', 'WEBHOOK', 'SYSTEM')),
+  estado_anterior VARCHAR(20),
+  estado_nuevo VARCHAR(20),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  procesado BOOLEAN NOT NULL DEFAULT false,
+  mensaje_error TEXT,
+  recibido_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  procesado_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX eventos_pago_paypal_orden_idx
+  ON eventos_pago_paypal (orden_id, creado_en);
+
+CREATE INDEX eventos_pago_paypal_pendientes_idx
+  ON eventos_pago_paypal (recibido_en)
+  WHERE procesado = false;
+
 -- Certificados
 CREATE TABLE tipos_certificado (
   clave VARCHAR(40) PRIMARY KEY,

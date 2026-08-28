@@ -1,21 +1,33 @@
+import hashlib
+import json
 import uuid
 from datetime import date
+from decimal import Decimal
 
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.utils import html
 
 from core.models import (
     Aspirante,
+    CompraPaquetePsicometrico,
     Empresa,
     EstadoExpediente,
+    EstadoReportePsicometrico,
     EstadoUsuario,
     EstadoVacante,
     PerfilProfesional,
     Postulacion,
+    HistorialReportePsicometrico,
+    OrigenReportePsicometrico,
+    OrdenPagoPaypal,
+    PaquetePsicometrico,
+    ReportePsicometrico,
     Rol,
     Usuario,
     UsuarioRol,
@@ -965,3 +977,469 @@ class CambioPasswordSerializer(serializers.Serializer):
         usuario.actualizado_en = timezone.now()
         usuario.save(update_fields=["password_hash", "actualizado_en"])
         return usuario
+
+PERMISO_ADMIN_REPORTES = "reportes-psicometricos:administrar"
+PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
+
+
+class EscalaPsicometricaSerializer(serializers.Serializer):
+    """Un factor del instrumento con el puntaje que obtuvo la persona."""
+
+    nombre = serializers.CharField(max_length=120)
+    puntaje = serializers.IntegerField(min_value=0, max_value=100)
+
+
+class EscalasField(serializers.ListField):
+    """Escalas del instrumento, tambien cuando llegan dentro de un multipart.
+
+    La carga del archivo obliga a `multipart/form-data`, y ahi una lista de
+    objetos no cabe: el cliente manda las escalas como una cadena JSON en un
+    solo campo. `ListField` la tomaria con `getlist` y entregaria la cadena
+    envuelta en una lista, asi que aqui se toma el valor crudo y se decodifica.
+    """
+
+    child = EscalaPsicometricaSerializer()
+
+    def get_value(self, dictionary):
+        if html.is_html_input(dictionary):
+            return dictionary.get(self.field_name, serializers.empty)
+        return super().get_value(dictionary)
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                raise serializers.ValidationError(
+                    "Las escalas deben venir como una lista JSON."
+                )
+        return super().to_internal_value(data)
+
+
+class ReportePsicometricoSerializer(serializers.ModelSerializer):
+    """Reporte psicometrico del expediente.
+
+    Sirve a dos flujos con reglas distintas: el administrador archiva el
+    informe de una evaluacion aplicada por la plataforma, y el propio
+    aspirante archiva el que trae de fuera. El origen no lo declara el
+    cliente, lo decide el permiso con el que entra.
+    """
+
+    aspirante = serializers.PrimaryKeyRelatedField(
+        queryset=Aspirante.objects.all(), required=False
+    )
+    aspirante_nombre = serializers.CharField(
+        source="aspirante.nombre_completo", read_only=True
+    )
+    archivo = serializers.FileField(write_only=True)
+    # Como se muestra en el expediente. Es opcional: quien no lo mande deja el
+    # nombre del archivo, que es de donde salia antes de que se pudiera editar.
+    nombre_original = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    escalas = EscalasField(required=False)
+
+    class Meta:
+        model = ReportePsicometrico
+        fields = (
+            "id",
+            "aspirante",
+            "aspirante_nombre",
+            "referencia_evaluacion_externa",
+            "archivo",
+            "nombre_original",
+            "mime_type",
+            "tamano_bytes",
+            "checksum_sha256",
+            "precio",
+            "moneda",
+            "estado",
+            "origen",
+            "area_clave",
+            "aplicada_en",
+            "vigente_hasta",
+            "puntaje",
+            "nivel",
+            "escalas",
+            "paginas",
+            "notas",
+            "disponible_para_compra",
+            "creado_en",
+            "actualizado_en",
+        )
+        read_only_fields = (
+            "id",
+            "aspirante_nombre",
+            "mime_type",
+            "tamano_bytes",
+            "checksum_sha256",
+            "precio",
+            "moneda",
+            "estado",
+            "origen",
+            "disponible_para_compra",
+            "creado_en",
+            "actualizado_en",
+        )
+
+    def _permisos(self):
+        return permisos_de(self.context["request"].user)
+
+    def _es_administrador(self):
+        return PERMISO_ADMIN_REPORTES in self._permisos()
+
+    def _aspirante_del_usuario(self):
+        aspirante = Aspirante.objects.filter(
+            usuario=self.context["request"].user
+        ).first()
+        if aspirante is None:
+            raise serializers.ValidationError(
+                {"aspirante": "Tu cuenta todavia no tiene expediente de aspirante."}
+            )
+        return aspirante
+
+    def validate_archivo(self, archivo):
+        maximo = settings.REPORTE_PSICOMETRICO_MAX_MB * 1024 * 1024
+        if archivo.size <= 0:
+            raise serializers.ValidationError("El PDF esta vacio.")
+        if archivo.size > maximo:
+            raise serializers.ValidationError(
+                f"El PDF no puede superar {settings.REPORTE_PSICOMETRICO_MAX_MB} MB."
+            )
+
+        encabezado = archivo.read(5)
+        archivo.seek(0)
+        if encabezado != b"%PDF-":
+            raise serializers.ValidationError("El archivo no es un PDF valido.")
+
+        content_type = getattr(archivo, "content_type", "")
+        if content_type not in ("application/pdf", "application/x-pdf"):
+            raise serializers.ValidationError(
+                "El tipo de contenido debe ser application/pdf."
+            )
+        return archivo
+
+    def validate_puntaje(self, puntaje):
+        if puntaje is not None and not 0 <= puntaje <= 100:
+            raise serializers.ValidationError("El puntaje va de 0 a 100.")
+        return puntaje
+
+    def validate_paginas(self, paginas):
+        if paginas is not None and paginas < 0:
+            raise serializers.ValidationError("Las paginas no pueden ser negativas.")
+        return paginas
+
+    def validate(self, attrs):
+        # A nombre de quien se archiva. El aspirante no puede escribir en el
+        # expediente de otro aunque mande su id en el formulario.
+        if self._es_administrador():
+            if attrs.get("aspirante") is None:
+                raise serializers.ValidationError(
+                    {"aspirante": "Indica a que aspirante pertenece el reporte."}
+                )
+        else:
+            propio = self._aspirante_del_usuario()
+            declarado = attrs.get("aspirante")
+            if declarado is not None and declarado.pk != propio.pk:
+                raise serializers.ValidationError(
+                    {"aspirante": "Solo puedes archivar reportes en tu expediente."}
+                )
+            attrs["aspirante"] = propio
+
+        aplicada_en = attrs.get("aplicada_en")
+        vigente_hasta = attrs.get("vigente_hasta")
+        ahora = timezone.now()
+        if aplicada_en and aplicada_en > ahora:
+            raise serializers.ValidationError(
+                {"aplicada_en": "La fecha de aplicacion no puede estar en el futuro."}
+            )
+        if aplicada_en and vigente_hasta and vigente_hasta < aplicada_en:
+            raise serializers.ValidationError(
+                {
+                    "vigente_hasta": (
+                        "La vigencia no puede terminar antes de la aplicacion."
+                    )
+                }
+            )
+        return attrs
+
+    def _reemplazar_misma_evaluacion(self, aspirante, referencia, ahora):
+        """Marca como reemplazado el reporte previo de esa misma evaluacion.
+
+        Solo aplica cuando la carga trae referencia externa: dos informes de
+        evaluaciones distintas conviven en el archivero, pero volver a subir
+        la misma evaluacion es una correccion, no un documento nuevo.
+        """
+        if not referencia:
+            return []
+
+        anteriores = list(
+            ReportePsicometrico.objects.select_for_update().filter(
+                aspirante=aspirante,
+                referencia_evaluacion_externa=referencia,
+                estado=EstadoReportePsicometrico.DISPONIBLE,
+            )
+        )
+        ReportePsicometrico.objects.filter(
+            id__in=[anterior.id for anterior in anteriores]
+        ).update(
+            estado=EstadoReportePsicometrico.REEMPLAZADO,
+            disponible_para_compra=False,
+            actualizado_en=ahora,
+        )
+        return anteriores
+
+    @transaction.atomic
+    def create(self, validated_data):
+        archivo = validated_data["archivo"]
+        checksum = hashlib.sha256()
+        for bloque in archivo.chunks():
+            checksum.update(bloque)
+        archivo.seek(0)
+
+        usuario = self.context["request"].user
+        aspirante = validated_data["aspirante"]
+        referencia = validated_data.get("referencia_evaluacion_externa")
+        ahora = timezone.now()
+
+        # Lo que sube el propio aspirante es su documento, no un informe que
+        # la plataforma pueda vender.
+        de_plataforma = self._es_administrador()
+        origen = (
+            OrigenReportePsicometrico.PLATAFORMA
+            if de_plataforma
+            else OrigenReportePsicometrico.PROPIA
+        )
+
+        # Bloquear el aspirante serializa incluso las dos primeras cargas
+        # concurrentes, cuando todavia no existe un reporte que bloquear.
+        Aspirante.objects.select_for_update().get(pk=aspirante.pk)
+        anteriores = self._reemplazar_misma_evaluacion(aspirante, referencia, ahora)
+
+        escalas = [dict(escala) for escala in validated_data.pop("escalas", [])]
+
+        reporte = ReportePsicometrico.objects.create(
+            id=uuid.uuid4(),
+            subido_por=usuario,
+            nombre_original=(
+                validated_data.pop("nombre_original", "").strip()
+                or archivo.name[:255]
+            ),
+            mime_type="application/pdf",
+            tamano_bytes=archivo.size,
+            checksum_sha256=checksum.hexdigest(),
+            precio=Decimal(settings.REPORTE_PSICOMETRICO_PRECIO),
+            moneda=settings.REPORTE_PSICOMETRICO_MONEDA.upper(),
+            estado=EstadoReportePsicometrico.DISPONIBLE,
+            origen=origen,
+            escalas=escalas,
+            disponible_para_compra=de_plataforma,
+            creado_en=ahora,
+            actualizado_en=ahora,
+            **validated_data,
+        )
+        HistorialReportePsicometrico.objects.create(
+            id=uuid.uuid4(),
+            reporte=reporte,
+            accion="uploaded",
+            realizado_por=usuario,
+            realizado_por_email=usuario.email,
+            metadata={
+                "nombre_original": reporte.nombre_original,
+                "tamano_bytes": reporte.tamano_bytes,
+                "checksum_sha256": reporte.checksum_sha256,
+                "origen": reporte.origen,
+            },
+            creado_en=ahora,
+        )
+        HistorialReportePsicometrico.objects.bulk_create(
+            [
+                HistorialReportePsicometrico(
+                    id=uuid.uuid4(),
+                    reporte=anterior,
+                    accion="replaced",
+                    realizado_por=usuario,
+                    realizado_por_email=usuario.email,
+                    metadata={"reemplazado_por": str(reporte.id)},
+                    creado_en=ahora,
+                )
+                for anterior in anteriores
+            ]
+        )
+        return reporte
+
+
+class CrearOrdenPagoPaypalSerializer(serializers.Serializer):
+    """Lo que se va a cobrar: un reporte suelto o un paquete. Nunca los dos.
+
+    De un paquete solo llega su clave y, si es a la medida, la cantidad. El
+    importe no se recibe: lo pone el catalogo del servidor.
+    """
+
+    reporte_id = serializers.UUIDField(required=False)
+    paquete_clave = serializers.CharField(max_length=40, required=False)
+    cantidad = serializers.IntegerField(required=False, min_value=1)
+
+    def validate_paquete_clave(self, clave):
+        paquete = PaquetePsicometrico.objects.filter(
+            clave=clave, activo=True
+        ).first()
+        if paquete is None:
+            raise serializers.ValidationError("Ese paquete no está a la venta.")
+        self.context["paquete"] = paquete
+        return clave
+
+    def validate(self, datos):
+        pide_reporte = "reporte_id" in datos
+        pide_paquete = "paquete_clave" in datos
+        if pide_reporte == pide_paquete:
+            raise serializers.ValidationError(
+                "Manda reporte_id o paquete_clave, uno de los dos."
+            )
+        if pide_reporte and "cantidad" in datos:
+            raise serializers.ValidationError(
+                {"cantidad": "La cantidad solo aplica a un paquete."}
+            )
+
+        if pide_paquete:
+            paquete = self.context["paquete"]
+            try:
+                # Se cotiza aqui para responder 400 con el motivo exacto en vez
+                # de dejar que el servicio lo descubra a medio reservar.
+                paquete.cotizar(datos.get("cantidad"))
+            except ValueError as error:
+                raise serializers.ValidationError(
+                    {"cantidad": str(error)}
+                ) from error
+
+        return datos
+
+    def validate_reporte_id(self, reporte_id):
+        try:
+            reporte = ReportePsicometrico.objects.select_related(
+                "aspirante"
+            ).get(pk=reporte_id)
+        except ReportePsicometrico.DoesNotExist:
+            raise serializers.ValidationError("El reporte no existe.")
+
+        usuario = self.context["request"].user
+        if reporte.aspirante.usuario_id != usuario.id:
+            # No confirmar a un usuario que existe el reporte de otra persona.
+            raise serializers.ValidationError("El reporte no existe.")
+        if (
+            reporte.estado != EstadoReportePsicometrico.DISPONIBLE
+            or reporte.origen != OrigenReportePsicometrico.PLATAFORMA
+            or not reporte.disponible_para_compra
+            or reporte.precio <= 0
+        ):
+            raise serializers.ValidationError(
+                "El reporte no está disponible para compra."
+            )
+        self.context["reporte"] = reporte
+        return reporte_id
+
+
+class CompraPaquetePsicometricoSerializer(serializers.ModelSerializer):
+    """La compra tal como se le muestra a quien la hizo."""
+
+    paquete_clave = serializers.CharField(source="paquete_id", read_only=True)
+    creditos_disponibles = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = CompraPaquetePsicometrico
+        fields = (
+            "id",
+            "paquete_clave",
+            "paquete_nombre",
+            "cantidad_pruebas",
+            "precio_unitario",
+            "monto",
+            "moneda",
+            "estado",
+            "creditos_totales",
+            "creditos_consumidos",
+            "creditos_disponibles",
+            "vigente_hasta",
+            "pagada_en",
+            "creado_en",
+        )
+        read_only_fields = fields
+
+
+class OrdenPagoPaypalSerializer(serializers.ModelSerializer):
+    # Sin `source`: la orden ahora puede no tener reporte, y leer `reporte.id`
+    # de un None dejaria el campo fuera de la respuesta en vez de en null.
+    reporte_id = serializers.UUIDField(read_only=True, allow_null=True)
+    compra = CompraPaquetePsicometricoSerializer(read_only=True)
+
+    class Meta:
+        model = OrdenPagoPaypal
+        fields = (
+            "referencia_interna",
+            "reporte_id",
+            "compra",
+            "paypal_order_id",
+            "monto",
+            "moneda",
+            "estado",
+            "approval_url",
+            "expira_en",
+            "creado_en",
+            "actualizado_en",
+            "pagado_en",
+        )
+
+
+class CapturarOrdenPagoPaypalSerializer(serializers.Serializer):
+    """Cobro de la orden con la que PayPal devuelve a la persona.
+
+    Se identifica por `paypal_order_id` y no por la referencia interna porque
+    eso es lo que PayPal pone en la URL de retorno (`?token=...`): pedir otra
+    cosa obligaria al frontend a acordarse de un dato entre dos redirecciones.
+    """
+
+    paypal_order_id = serializers.CharField(max_length=64)
+
+    def validate_paypal_order_id(self, paypal_order_id):
+        orden = (
+            OrdenPagoPaypal.objects.select_related("compra")
+            .filter(
+                paypal_order_id=paypal_order_id,
+                comprador=self.context["request"].user,
+            )
+            .first()
+        )
+        if orden is None:
+            # No confirmar que existe la orden de otra persona.
+            raise serializers.ValidationError("La orden no existe.")
+        self.context["orden"] = orden
+        return paypal_order_id
+
+
+class PaquetePsicometricoSerializer(serializers.ModelSerializer):
+    """El catalogo como lo lee la pagina de paquetes.
+
+    Es de solo lectura a proposito: los precios se publican desde aqui y no
+    se reciben. El cliente solo elige una clave y, en el paquete a la medida,
+    una cantidad.
+    """
+
+    es_a_medida = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = PaquetePsicometrico
+        fields = (
+            "clave",
+            "nombre",
+            "descripcion",
+            "incluye",
+            "es_a_medida",
+            "cantidad_pruebas",
+            "precio_total",
+            "cantidad_minima",
+            "cantidad_maxima",
+            "precio_unitario",
+            "moneda",
+            "vigencia_meses",
+        )
+        read_only_fields = fields

@@ -12,6 +12,8 @@ INSERT INTO roles (clave, nombre, descripcion) VALUES
 
 INSERT INTO permisos (clave, descripcion) VALUES
   ('usuarios:administrar', 'Administrar usuarios y roles'),
+  ('reportes-psicometricos:administrar', 'Subir y administrar reportes psicometricos'),
+  ('reportes-psicometricos:subir-propio', 'Subir reportes psicometricos al expediente propio'),
   ('aspirantes:consultar', 'Consultar el expediente de cualquier aspirante'),
   ('vacantes:consultar', 'Consultar vacantes'),
   ('vacantes:administrar', 'Crear y editar vacantes'),
@@ -50,7 +52,8 @@ WHERE r.clave = 'aspirante'
     'vacantes:consultar',
     'postulaciones:consultar',
     'certificados:consultar',
-    'certificados:descargar'
+    'certificados:descargar',
+    'reportes-psicometricos:subir-propio'
   );
 
 INSERT INTO roles_permisos (rol_id, permiso_id)
@@ -84,6 +87,22 @@ INSERT INTO usuarios_roles (usuario_id, rol_id)
 SELECT '7a15fc4f-d972-48f7-b3d4-4d5f1b877dab', id
 FROM roles
 WHERE clave = 'administrador';
+
+-- Usuarios AMIS de desarrollo. Contraseña inicial: Amis2026!
+INSERT INTO usuarios (
+  id, nombre_completo, email, password_hash, estado, email_verificado_en
+) VALUES
+  ('6dc07f5a-358c-4bd4-9f58-40fe36604393', 'Administrador AMIS', 'admin@amis.org', 'pbkdf2_sha256$1500000$Zrb4ZOEiEMlB58WPN5N8sA$EaQp2gpEC2kqG5/y4WSqIsHfPwgKk8DiJCLBbVoMlcA=', 'activo', now()),
+  ('a5434e6e-8073-4f02-aabf-a0e92f79d4ae', 'Aspirante AMIS', 'aspirante@amis.org', 'pbkdf2_sha256$1500000$MdLUbAiuonT4HXi5AO4TJ5$vyBvnOYQCyvzlnoPY7EWkQe6puZDlL0z15GynulgBjM=', 'activo', now());
+
+INSERT INTO usuarios_roles (usuario_id, rol_id)
+SELECT u.id, r.id
+FROM usuarios u
+JOIN roles r ON r.clave = CASE lower(u.email)
+  WHEN 'admin@amis.org' THEN 'administrador'
+  WHEN 'aspirante@amis.org' THEN 'aspirante'
+END
+WHERE lower(u.email) IN ('admin@amis.org', 'aspirante@amis.org');
 
 -- Usuarios de demostración, uno por rol. Contraseña para entorno local: 1234.
 INSERT INTO usuarios (
@@ -122,6 +141,40 @@ INSERT INTO catalogo_requisitos (clave, nombre) VALUES
   ('curriculum', 'Currículum vigente'),
   ('evaluacion', 'Evaluación aprobada'),
   ('asistencia', 'Asistencia acreditada');
+
+-- Paquetes psicométricos. Los tres cerrados y el de volumen. Los precios de
+-- este catálogo son los únicos que se cobran: la página no propone importes.
+INSERT INTO paquetes_psicometricos (
+  clave, nombre, descripcion, incluye,
+  cantidad_pruebas, precio_total,
+  cantidad_minima, cantidad_maxima, precio_unitario,
+  moneda, vigencia_meses, orden_visual
+) VALUES
+  (
+    'unica', 'Prueba única',
+    'Cuando ya sabes qué área quieres medir.',
+    '["La prueba que elijas", "Informe individual en 48 horas"]'::jsonb,
+    1, 890.00, NULL, NULL, NULL, 'MXN', NULL, 1
+  ),
+  (
+    'perfil', 'Perfil',
+    'Una lectura redonda de tu candidatura.',
+    '["Tres pruebas complementarias", "Informe comparado entre áreas", "Vigencia de 12 meses"]'::jsonb,
+    3, 2190.00, NULL, NULL, NULL, 'MXN', 12, 2
+  ),
+  (
+    'bateria', 'Batería completa',
+    'Las cinco áreas que evalúa el expediente.',
+    '["Las cinco áreas del perfil", "Informe ejecutivo para reclutamiento", "Vigencia de 12 meses"]'::jsonb,
+    5, 3290.00, NULL, NULL, NULL, 'MXN', 12, 3
+  ),
+  (
+    'medida', 'A tu medida',
+    'Elige cuántas pruebas necesitas y paga por volumen.',
+    '["Precio por volumen", "Vigencia de 12 meses"]'::jsonb,
+    NULL, NULL, 6, 30, 640.00, 'MXN', 12, 4
+  )
+ON CONFLICT (clave) DO NOTHING;
 
 INSERT INTO tipos_certificado (clave, nombre) VALUES
   ('participacion', 'Participación'),
@@ -184,6 +237,8 @@ INSERT INTO aspirantes (
   puesto_aspirado, folio_aplicacion, estado_expediente, convocatoria_id,
   registrado_en
 ) VALUES
+  ('ASP-AMIS-001', 'AM2026-0007', 'Aspirante AMIS', 'aspirante@amis.org',
+   NULL, NULL, NULL, NULL, 'incompleto', NULL, now()),
   ('ASP-001', 'AM2026-0001', 'Ana Gómez Ríos', 'ana.gomez@amis.org',
    '+52 55 1234 5678', '12345678', 'Analista de riesgos', 'APP-2026-0001',
    'activo', 'AMIS-2026-01', '2026-01-12T09:30:00Z'),
@@ -202,6 +257,10 @@ INSERT INTO aspirantes (
   ('ASP-006', 'AM2026-0006', 'Julián Torres Molina', 'julian.torres@amis.org',
    '+52 55 6789 0123', '67890123', 'Técnico de mantenimiento', 'APP-2026-0006',
    'suspendido', 'AMIS-2026-01', '2026-01-20T08:15:00Z');
+
+UPDATE aspirantes
+SET usuario_id = 'a5434e6e-8073-4f02-aabf-a0e92f79d4ae'
+WHERE id = 'ASP-AMIS-001';
 
 INSERT INTO aspirantes_requisitos (aspirante_id, requisito_clave, cumplido)
 SELECT a.id, r.clave,

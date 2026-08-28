@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -68,6 +70,68 @@ class EstadoEnvio(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ENVIADO = "enviado", "Enviado"
     FALLIDO = "fallido", "Fallido"
+
+
+class EstadoReportePsicometrico(models.TextChoices):
+    DISPONIBLE = "available", "Disponible"
+    REEMPLAZADO = "replaced", "Reemplazado"
+    DESHABILITADO = "disabled", "Deshabilitado"
+
+
+class OrigenReportePsicometrico(models.TextChoices):
+    """Quien produjo el documento, no quien lo cargó.
+
+    Un administrador puede subir el informe de una evaluación aplicada por la
+    plataforma (`plataforma`) y el propio aspirante puede archivar el informe
+    que trae de fuera (`propia`). Sólo el primero es comercializable.
+    """
+
+    PLATAFORMA = "plataforma", "Aplicada por la plataforma"
+    PROPIA = "propia", "Subida por el aspirante"
+
+
+class AreaPsicometrica(models.TextChoices):
+    """Áreas del perfil profesional que cubre una evaluación.
+
+    Las claves las comparte la interfaz para agrupar y filtrar el archivero,
+    así que tienen que coincidir letra por letra con las suyas.
+    """
+
+    RAZONAMIENTO = "razonamiento", "Razonamiento"
+    PERSONALIDAD = "personalidad", "Personalidad"
+    INTEGRIDAD = "integridad", "Integridad"
+    LIDERAZGO = "liderazgo", "Liderazgo"
+    ESTRES = "estres", "Manejo de estrés"
+    COMPARADO = "comparado", "Comparado"
+    OTRA = "otra", "Otra evaluación"
+
+
+class EstadoPagoPaypal(models.TextChoices):
+    PENDING = "PENDING", "Pendiente"
+    CREATED = "CREATED", "Creada"
+    APPROVED = "APPROVED", "Aprobada"
+    COMPLETED = "COMPLETED", "Completada"
+    FAILED = "FAILED", "Fallida"
+    CANCELLED = "CANCELLED", "Cancelada"
+    REFUNDED = "REFUNDED", "Reembolsada"
+
+
+class EstadoCompraPaquete(models.TextChoices):
+    PENDIENTE = "PENDIENTE", "Pendiente de pago"
+    PAGADA = "PAGADA", "Pagada"
+    CANCELADA = "CANCELADA", "Cancelada"
+    REEMBOLSADA = "REEMBOLSADA", "Reembolsada"
+
+
+class TipoTransaccionPaypal(models.TextChoices):
+    CAPTURE = "CAPTURE", "Captura"
+    REFUND = "REFUND", "Reembolso"
+
+
+class OrigenEventoPago(models.TextChoices):
+    API = "API", "API"
+    WEBHOOK = "WEBHOOK", "Webhook"
+    SYSTEM = "SYSTEM", "Sistema"
 
 
 class TablaExistente(models.Model):
@@ -489,6 +553,345 @@ class DocumentoAspirante(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "documentos_aspirante"
+
+
+def ruta_reporte_psicometrico(instance, filename):
+    """Evita exponer o reutilizar el nombre proporcionado por el cliente."""
+    return f"reportes_psicometricos/{instance.aspirante_id}/{uuid.uuid4()}.pdf"
+
+
+class ReportePsicometrico(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    aspirante = models.ForeignKey(
+        Aspirante,
+        models.PROTECT,
+        db_column="aspirante_id",
+        related_name="reportes_psicometricos",
+    )
+    subido_por = models.ForeignKey(
+        Usuario,
+        models.SET_NULL,
+        db_column="subido_por_id",
+        null=True,
+        blank=True,
+        related_name="reportes_psicometricos_subidos",
+    )
+    referencia_evaluacion_externa = models.CharField(
+        max_length=180, null=True, blank=True
+    )
+    nombre_original = models.CharField(max_length=255)
+    archivo = models.FileField(
+        upload_to=ruta_reporte_psicometrico, db_column="archivo_clave"
+    )
+    mime_type = models.CharField(max_length=100)
+    tamano_bytes = models.BigIntegerField()
+    checksum_sha256 = models.CharField(max_length=64)
+    precio = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoReportePsicometrico.choices,
+        default=EstadoReportePsicometrico.DISPONIBLE,
+    )
+    origen = models.CharField(
+        max_length=20,
+        choices=OrigenReportePsicometrico.choices,
+        default=OrigenReportePsicometrico.PLATAFORMA,
+    )
+    area_clave = models.CharField(
+        max_length=40,
+        choices=AreaPsicometrica.choices,
+        default=AreaPsicometrica.OTRA,
+    )
+    # Fecha en que se aplicó la evaluación, no en que se cargó el archivo:
+    # con eso el archivero ordena y agrupa por año.
+    aplicada_en = models.DateTimeField(null=True, blank=True)
+    vigente_hasta = models.DateTimeField(null=True, blank=True)
+    puntaje = models.SmallIntegerField(null=True, blank=True)
+    nivel = models.CharField(max_length=40, null=True, blank=True)
+    # Lista de {"nombre": str, "puntaje": int}. Es un JSONB y no una tabla
+    # aparte porque las escalas varían con cada instrumento y sólo se leen
+    # completas, junto con su reporte.
+    escalas = models.JSONField(default=list)
+    paginas = models.IntegerField(null=True, blank=True)
+    # Nota libre de quien archiva: para que proceso fue, quien lo aplico.
+    notas = models.TextField(null=True, blank=True)
+    disponible_para_compra = models.BooleanField(default=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "reportes_psicometricos"
+
+
+class HistorialReportePsicometrico(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    reporte = models.ForeignKey(
+        ReportePsicometrico,
+        models.CASCADE,
+        db_column="reporte_id",
+        related_name="historial",
+    )
+    accion = models.CharField(max_length=50)
+    realizado_por = models.ForeignKey(
+        Usuario,
+        models.SET_NULL,
+        db_column="realizado_por_id",
+        null=True,
+        blank=True,
+        related_name="acciones_reportes_psicometricos",
+    )
+    realizado_por_email = models.EmailField(max_length=254, null=True, blank=True)
+    metadata = models.JSONField(default=dict)
+    creado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "historial_reportes_psicometricos"
+
+
+class PaquetePsicometrico(TablaExistente):
+    """Paquete del catalogo, en cualquiera de sus dos formas.
+
+    Cerrado: cantidad y total fijos (`cantidad_pruebas`, `precio_total`).
+    A la medida: el comprador elige cuantas pruebas quiere dentro del rango
+    y el total sale de multiplicar por `precio_unitario`. La base impide con
+    un CHECK que una fila mezcle las dos formas.
+
+    El precio vive aqui y no en el frontend. Es el unico importe que puede
+    cobrarse: el cliente manda que paquete quiere, nunca cuanto cuesta.
+    """
+
+    clave = models.CharField(primary_key=True, max_length=40)
+    nombre = models.CharField(max_length=120)
+    descripcion = models.TextField(null=True, blank=True)
+    # Lista de textos para la tarjeta. Es un JSONB y no una tabla aparte
+    # porque solo se lee completa, junto con su paquete.
+    incluye = models.JSONField(default=list)
+    cantidad_pruebas = models.SmallIntegerField(null=True, blank=True)
+    precio_total = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    cantidad_minima = models.SmallIntegerField(null=True, blank=True)
+    cantidad_maxima = models.SmallIntegerField(null=True, blank=True)
+    precio_unitario = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    moneda = models.CharField(max_length=3, default="MXN")
+    vigencia_meses = models.SmallIntegerField(null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    orden_visual = models.SmallIntegerField(default=0)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "paquetes_psicometricos"
+
+    def __str__(self):
+        return self.nombre
+
+    @property
+    def es_a_medida(self):
+        return self.precio_unitario is not None
+
+    def cotizar(self, cantidad=None):
+        """Cantidad y total a cobrar, o `ValueError` si la peticion no cuadra.
+
+        Se resuelve aqui y no en la vista para que el importe salga del mismo
+        lugar sin importar quien pregunte: el catalogo, el checkout o una
+        prueba.
+        """
+        if not self.es_a_medida:
+            if cantidad is not None and int(cantidad) != self.cantidad_pruebas:
+                raise ValueError(
+                    "Este paquete tiene una cantidad fija de pruebas."
+                )
+            return self.cantidad_pruebas, self.precio_total
+
+        if cantidad is None:
+            raise ValueError("Indica cuantas pruebas quieres comprar.")
+        cantidad = int(cantidad)
+        if cantidad < self.cantidad_minima or cantidad > self.cantidad_maxima:
+            raise ValueError(
+                f"La cantidad debe estar entre {self.cantidad_minima} y "
+                f"{self.cantidad_maxima} pruebas."
+            )
+        return cantidad, self.precio_unitario * cantidad
+
+
+class CompraPaquetePsicometrico(TablaExistente):
+    """Compra de un paquete y la bolsa de creditos que deja.
+
+    Nace en PENDIENTE junto con la orden de pago y pasa a PAGADA cuando
+    PayPal confirma la captura. Guarda una fotografia del nombre y del precio
+    porque el catalogo cambia y un comprobante ya emitido no puede cambiar
+    con el.
+    """
+
+    id = models.UUIDField(primary_key=True)
+    comprador = models.ForeignKey(
+        Usuario,
+        models.PROTECT,
+        db_column="comprador_id",
+        related_name="compras_paquete_psicometrico",
+    )
+    paquete = models.ForeignKey(
+        PaquetePsicometrico,
+        models.PROTECT,
+        db_column="paquete_clave",
+        related_name="compras",
+    )
+    paquete_nombre = models.CharField(max_length=120)
+    cantidad_pruebas = models.SmallIntegerField()
+    precio_unitario = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoCompraPaquete.choices,
+        default=EstadoCompraPaquete.PENDIENTE,
+    )
+    creditos_totales = models.SmallIntegerField()
+    creditos_consumidos = models.SmallIntegerField(default=0)
+    vigente_hasta = models.DateTimeField(null=True, blank=True)
+    pagada_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "compras_paquete_psicometrico"
+
+    @property
+    def creditos_disponibles(self):
+        return self.creditos_totales - self.creditos_consumidos
+
+
+class OrdenPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    referencia_interna = models.CharField(max_length=50, unique=True)
+    comprador = models.ForeignKey(
+        Usuario,
+        models.PROTECT,
+        db_column="comprador_id",
+        related_name="ordenes_pago_paypal",
+    )
+    # Una orden cobra exactamente una de dos cosas: un reporte suelto que ya
+    # esta en el expediente, o la compra de un paquete. Un CHECK en la base
+    # exige que venga uno y solo uno.
+    reporte = models.ForeignKey(
+        ReportePsicometrico,
+        models.PROTECT,
+        db_column="reporte_id",
+        null=True,
+        blank=True,
+        related_name="ordenes_pago",
+    )
+    compra = models.ForeignKey(
+        CompraPaquetePsicometrico,
+        models.PROTECT,
+        db_column="compra_id",
+        null=True,
+        blank=True,
+        related_name="ordenes_pago",
+    )
+    referencia_evaluacion_externa = models.CharField(
+        max_length=180, null=True, blank=True
+    )
+    paypal_order_id = models.CharField(
+        max_length=64, unique=True, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoPagoPaypal.choices,
+        default=EstadoPagoPaypal.PENDING,
+    )
+    clave_idempotencia = models.CharField(max_length=128, null=True, blank=True)
+    approval_url = models.TextField(null=True, blank=True)
+    paypal_request_id = models.CharField(max_length=64, null=True, blank=True)
+    respuesta_proveedor = models.JSONField(default=dict)
+    codigo_error = models.CharField(max_length=100, null=True, blank=True)
+    mensaje_error = models.TextField(null=True, blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    expira_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+    pagado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TablaExistente.Meta):
+        db_table = "ordenes_pago_paypal"
+
+
+class TransaccionPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    orden = models.ForeignKey(
+        OrdenPagoPaypal,
+        models.PROTECT,
+        db_column="orden_id",
+        related_name="transacciones",
+    )
+    tipo = models.CharField(max_length=20, choices=TipoTransaccionPaypal.choices)
+    paypal_capture_id = models.CharField(
+        max_length=64, null=True, blank=True
+    )
+    paypal_refund_id = models.CharField(
+        max_length=64, unique=True, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(max_length=20, choices=EstadoPagoPaypal.choices)
+    comision = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    monto_neto = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    respuesta_proveedor = models.JSONField(default=dict)
+    procesada_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "transacciones_pago_paypal"
+
+
+class EventoPagoPaypal(TablaExistente):
+    id = models.UUIDField(primary_key=True)
+    orden = models.ForeignKey(
+        OrdenPagoPaypal,
+        models.SET_NULL,
+        db_column="orden_id",
+        null=True,
+        blank=True,
+        related_name="eventos",
+    )
+    transaccion = models.ForeignKey(
+        TransaccionPagoPaypal,
+        models.SET_NULL,
+        db_column="transaccion_id",
+        null=True,
+        blank=True,
+        related_name="eventos",
+    )
+    paypal_event_id = models.CharField(
+        max_length=100, unique=True, null=True, blank=True
+    )
+    tipo_evento = models.CharField(max_length=100)
+    origen = models.CharField(max_length=20, choices=OrigenEventoPago.choices)
+    estado_anterior = models.CharField(max_length=20, null=True, blank=True)
+    estado_nuevo = models.CharField(max_length=20, null=True, blank=True)
+    payload = models.JSONField(default=dict)
+    procesado = models.BooleanField(default=False)
+    mensaje_error = models.TextField(null=True, blank=True)
+    recibido_en = models.DateTimeField()
+    procesado_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "eventos_pago_paypal"
 
 
 class TipoCertificado(TablaExistente):

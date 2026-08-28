@@ -1,7 +1,10 @@
+import json
+import tempfile
 import uuid
 from datetime import timedelta
 
-from django.test import SimpleTestCase, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -15,6 +18,10 @@ from core.models import (
     ModalidadVacante,
     PerfilProfesional,
     Postulacion,
+    EstadoReportePsicometrico,
+    HistorialReportePsicometrico,
+    OrigenReportePsicometrico,
+    ReportePsicometrico,
     Rol,
     Usuario,
     UsuarioRol,
@@ -71,6 +78,7 @@ class ApiRoutesTest(SimpleTestCase):
             "api:postulacion-list",
             "api:vacante-list",
             "api:vacante-admin-list",
+            "api:reporte-psicometrico-list",
         )
 
         for nombre in nombres:
@@ -917,3 +925,238 @@ class PostulacionAltaTest(UsuariosDePruebaMixin, TestCase):
 
         postulacion = Postulacion.objects.get(id=respuesta.data["id"])
         self.assertEqual(postulacion.disponibilidad, ["Lunes a viernes"])
+
+
+class ReportePsicometricoTest(TestCase):
+    """El archivero de reportes: quien archiva, con que datos y quien lee."""
+
+    def setUp(self):
+        self.media_temporal = tempfile.TemporaryDirectory()
+        self.configuracion_media = override_settings(
+            MEDIA_ROOT=self.media_temporal.name,
+            REPORTE_PSICOMETRICO_PRECIO="499.00",
+            REPORTE_PSICOMETRICO_MONEDA="MXN",
+            REPORTE_PSICOMETRICO_MAX_MB=10,
+        )
+        self.configuracion_media.enable()
+        self.admin = Usuario.objects.get(email__iexact="admin@amis.org")
+        self.aspirante_usuario = Usuario.objects.get(
+            email__iexact="aspirante@amis.org"
+        )
+        self.aspirante = Aspirante.objects.get(usuario=self.aspirante_usuario)
+
+    def tearDown(self):
+        self.configuracion_media.disable()
+        self.media_temporal.cleanup()
+
+    def cliente_de(self, usuario):
+        cliente = APIClient()
+        cliente.force_authenticate(user=usuario)
+        return cliente
+
+    def pdf(self, nombre="resultado.pdf", contenido=None, content_type="application/pdf"):
+        return SimpleUploadedFile(
+            nombre,
+            contenido or b"%PDF-1.4\nreporte de prueba\n%%EOF",
+            content_type=content_type,
+        )
+
+    def subir(self, usuario=None, **cambios):
+        datos = {
+            "aspirante": self.aspirante.id,
+            "referencia_evaluacion_externa": "EVAL-EXT-001",
+            "archivo": self.pdf(),
+            **cambios,
+        }
+        datos = {
+            clave: valor for clave, valor in datos.items() if valor is not None
+        }
+        return self.cliente_de(usuario or self.admin).post(
+            reverse("api:reporte-psicometrico-list"),
+            datos,
+            format="multipart",
+        )
+
+    def test_administrador_sube_pdf_con_precio_del_backend(self):
+        respuesta = self.subir()
+
+        self.assertEqual(respuesta.status_code, 201)
+        self.assertEqual(respuesta.data["precio"], "499.00")
+        self.assertEqual(respuesta.data["moneda"], "MXN")
+        self.assertNotIn("archivo", respuesta.data)
+
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        self.assertEqual(reporte.subido_por, self.admin)
+        self.assertTrue(reporte.archivo.storage.exists(reporte.archivo.name))
+        self.assertEqual(len(reporte.checksum_sha256), 64)
+        self.assertTrue(
+            HistorialReportePsicometrico.objects.filter(
+                reporte=reporte, accion="uploaded"
+            ).exists()
+        )
+
+    def test_lo_que_sube_el_administrador_es_de_plataforma_y_vendible(self):
+        respuesta = self.subir()
+
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        self.assertEqual(
+            reporte.origen, OrigenReportePsicometrico.PLATAFORMA
+        )
+        self.assertTrue(reporte.disponible_para_compra)
+
+    def test_aspirante_archiva_su_propio_reporte_sin_ponerlo_a_la_venta(self):
+        respuesta = self.subir(
+            usuario=self.aspirante_usuario,
+            aspirante=None,
+            referencia_evaluacion_externa=None,
+            archivo=self.pdf("mi-informe.pdf"),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        # El origen no lo declara el cliente: sale del permiso con el que entra.
+        self.assertEqual(reporte.origen, OrigenReportePsicometrico.PROPIA)
+        self.assertFalse(reporte.disponible_para_compra)
+        self.assertEqual(reporte.aspirante, self.aspirante)
+
+    def test_aspirante_no_puede_archivar_en_expediente_ajeno(self):
+        otro = Aspirante.objects.exclude(pk=self.aspirante.pk).first()
+        self.assertIsNotNone(otro, "El seed necesita mas de un aspirante")
+
+        respuesta = self.subir(usuario=self.aspirante_usuario, aspirante=otro.id)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("aspirante", respuesta.data)
+
+    def test_rechaza_archivo_que_no_es_pdf(self):
+        respuesta = self.subir(
+            archivo=self.pdf(
+                nombre="reporte.pdf",
+                contenido=b"no es realmente un pdf",
+            )
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("archivo", respuesta.data)
+
+    def test_guarda_los_metadatos_de_la_evaluacion(self):
+        respuesta = self.subir(
+            area_clave="razonamiento",
+            aplicada_en="2026-02-25T09:15:00Z",
+            vigente_hasta="2027-02-25T09:15:00Z",
+            puntaje=86,
+            nivel="Alto",
+            paginas=6,
+            escalas=json.dumps(
+                [
+                    {"nombre": "Series numericas", "puntaje": 88},
+                    {"nombre": "Comprension verbal", "puntaje": 83},
+                ]
+            ),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        self.assertEqual(reporte.area_clave, "razonamiento")
+        self.assertEqual(reporte.puntaje, 86)
+        self.assertEqual(reporte.nivel, "Alto")
+        self.assertEqual(reporte.paginas, 6)
+        self.assertEqual(len(reporte.escalas), 2)
+        self.assertEqual(reporte.escalas[0]["nombre"], "Series numericas")
+
+    def test_rechaza_puntaje_fuera_de_rango(self):
+        respuesta = self.subir(puntaje=140)
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("puntaje", respuesta.data)
+
+    def test_rechaza_area_desconocida(self):
+        respuesta = self.subir(area_clave="astrologia")
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("area_clave", respuesta.data)
+
+    def test_rechaza_vigencia_anterior_a_la_aplicacion(self):
+        respuesta = self.subir(
+            aplicada_en="2026-02-25T09:15:00Z",
+            vigente_hasta="2025-02-25T09:15:00Z",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("vigente_hasta", respuesta.data)
+
+    def test_reportes_de_evaluaciones_distintas_conviven(self):
+        primero = self.subir()
+        segundo = self.subir(
+            referencia_evaluacion_externa="EVAL-EXT-002",
+            archivo=self.pdf("segundo.pdf"),
+        )
+
+        self.assertEqual(primero.status_code, 201)
+        self.assertEqual(segundo.status_code, 201)
+        # El expediente es historico: la evaluacion anterior sigue vigente.
+        anterior = ReportePsicometrico.objects.get(id=primero.data["id"])
+        self.assertEqual(anterior.estado, EstadoReportePsicometrico.DISPONIBLE)
+        self.assertTrue(anterior.disponible_para_compra)
+
+    def test_volver_a_subir_la_misma_evaluacion_reemplaza_la_anterior(self):
+        primero = self.subir()
+        segundo = self.subir(archivo=self.pdf("corregido.pdf"))
+
+        self.assertEqual(segundo.status_code, 201)
+        anterior = ReportePsicometrico.objects.get(id=primero.data["id"])
+        self.assertEqual(anterior.estado, EstadoReportePsicometrico.REEMPLAZADO)
+        self.assertFalse(anterior.disponible_para_compra)
+        self.assertTrue(anterior.historial.filter(accion="replaced").exists())
+
+    def test_aspirante_consulta_todo_su_historial(self):
+        primero = self.subir()
+        segundo = self.subir(
+            referencia_evaluacion_externa="EVAL-EXT-002",
+            archivo=self.pdf("segundo.pdf"),
+        )
+
+        respuesta = self.cliente_de(self.aspirante_usuario).get(
+            reverse("api:reporte-psicometrico-list")
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            {fila["id"] for fila in respuesta.data},
+            {primero.data["id"], segundo.data["id"]},
+        )
+
+    def test_aspirante_no_ve_reportes_de_otros(self):
+        otro = Aspirante.objects.exclude(pk=self.aspirante.pk).first()
+        self.assertIsNotNone(otro, "El seed necesita mas de un aspirante")
+        ajeno = self.subir(aspirante=otro.id)
+
+        respuesta = self.cliente_de(self.aspirante_usuario).get(
+            reverse("api:reporte-psicometrico-list")
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotIn(
+            ajeno.data["id"], {fila["id"] for fila in respuesta.data}
+        )
+
+    def test_administrador_filtra_por_aspirante(self):
+        otro = Aspirante.objects.exclude(pk=self.aspirante.pk).first()
+        self.assertIsNotNone(otro, "El seed necesita mas de un aspirante")
+        propio = self.subir()
+        self.subir(aspirante=otro.id, archivo=self.pdf("ajeno.pdf"))
+
+        respuesta = self.cliente_de(self.admin).get(
+            reverse("api:reporte-psicometrico-list"),
+            {"aspirante": self.aspirante.id},
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            {fila["id"] for fila in respuesta.data}, {propio.data["id"]}
+        )
+
+    def test_listado_requiere_autenticacion(self):
+        respuesta = APIClient().get(reverse("api:reporte-psicometrico-list"))
+
+        self.assertEqual(respuesta.status_code, 401)

@@ -14,9 +14,16 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from corsheaders.defaults import default_headers as cors_default_headers
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATABASE_SQL_DIR = BASE_DIR / 'database'
+
+# Configuración local de PayPal. Las variables definidas por el sistema tienen
+# prioridad y el archivo permanece fuera de Git mediante `.env.*`.
+load_dotenv(BASE_DIR / '.env.paypal', override=False)
 
 
 # Quick-start development settings - unsuitable for production
@@ -28,7 +35,16 @@ SECRET_KEY = 'django-insecure-n#)57!2^j+5bs7rul2pirmx*k=#edt9-)f0$+&m6yc!m8^^n*g
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# Hosts permitidos, separados por comas. Vacio y con DEBUG=True Django ya
+# acepta localhost, que es el caso normal; la variable existe para los tuneles
+# de desarrollo (cloudflared, ngrok), cuyo dominio cambia en cada reinicio y
+# no tiene por que quedar escrito en el codigo. Un punto inicial vale como
+# comodin de subdominio: `.trycloudflare.com`.
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -132,6 +148,40 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Los reportes psicometricos son documentos privados. MEDIA_ROOT se usa como
+# almacenamiento local durante esta etapa, pero no se publica mediante urls.py.
+MEDIA_ROOT = Path(os.getenv('PRIVATE_MEDIA_ROOT', BASE_DIR / 'media'))
+REPORTE_PSICOMETRICO_PRECIO = os.getenv('REPORTE_PSICOMETRICO_PRECIO', '499.00')
+REPORTE_PSICOMETRICO_MONEDA = os.getenv('REPORTE_PSICOMETRICO_MONEDA', 'MXN')
+REPORTE_PSICOMETRICO_MAX_MB = int(
+    os.getenv('REPORTE_PSICOMETRICO_MAX_MB', '10')
+)
+
+# PayPal REST API. El secreto nunca se expone al frontend ni se guarda en BD.
+PAYPAL_MODE = os.getenv('PAYPAL_MODE', 'sandbox').lower()
+PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID', '')
+PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET', '')
+PAYPAL_API_BASE_URL = (
+    'https://api-m.paypal.com'
+    if PAYPAL_MODE == 'live'
+    else 'https://api-m.sandbox.paypal.com'
+)
+PAYPAL_RETURN_URL = os.getenv(
+    'PAYPAL_RETURN_URL', 'http://localhost:5173/pagos/paypal/return'
+)
+PAYPAL_CANCEL_URL = os.getenv(
+    'PAYPAL_CANCEL_URL', 'http://localhost:5173/pagos/paypal/cancel'
+)
+# Id del webhook dado de alta en el panel de PayPal. Sin el no se puede
+# comprobar la firma de un evento, y un evento sin comprobar no se procesa:
+# el endpoint es publico y cualquiera podria anunciar un cobro que no existe.
+PAYPAL_WEBHOOK_ID = os.getenv('PAYPAL_WEBHOOK_ID', '')
+PAYPAL_HTTP_TIMEOUT = float(os.getenv('PAYPAL_HTTP_TIMEOUT', '15'))
+PAYPAL_PENDING_TIMEOUT_MINUTES = int(
+    os.getenv('PAYPAL_PENDING_TIMEOUT_MINUTES', '5')
+)
+PAYPAL_ORDER_TTL_HOURS = int(os.getenv('PAYPAL_ORDER_TTL_HOURS', '3'))
+
 
 # Django REST Framework
 REST_FRAMEWORK = {
@@ -177,6 +227,13 @@ SWAGGER_SETTINGS = {
     'USE_SESSION_AUTH': False,
 }
 
+
+# El checkout manda `Idempotency-Key` para que dos envios de la misma compra
+# no abran dos ordenes. No esta en la lista por defecto de django-cors-headers,
+# y sin declararla el navegador aprueba el preflight pero se niega a mandar el
+# POST: en el servidor no queda ni rastro, y en la pagina sale un
+# "failed to fetch" que no dice de que.
+CORS_ALLOW_HEADERS = (*cors_default_headers, 'idempotency-key')
 
 # Frontends permitidos durante el desarrollo local
 CORS_ALLOWED_ORIGINS = [
