@@ -15,6 +15,7 @@ from rest_framework.utils import html
 
 from core.models import (
     Aspirante,
+    CompraPaquetePsicometrico,
     Empresa,
     EstadoExpediente,
     EstadoReportePsicometrico,
@@ -25,6 +26,7 @@ from core.models import (
     HistorialReportePsicometrico,
     OrigenReportePsicometrico,
     OrdenPagoPaypal,
+    PaquetePsicometrico,
     ReportePsicometrico,
     Rol,
     Usuario,
@@ -1268,7 +1270,49 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
 
 
 class CrearOrdenPagoPaypalSerializer(serializers.Serializer):
-    reporte_id = serializers.UUIDField()
+    """Lo que se va a cobrar: un reporte suelto o un paquete. Nunca los dos.
+
+    De un paquete solo llega su clave y, si es a la medida, la cantidad. El
+    importe no se recibe: lo pone el catalogo del servidor.
+    """
+
+    reporte_id = serializers.UUIDField(required=False)
+    paquete_clave = serializers.CharField(max_length=40, required=False)
+    cantidad = serializers.IntegerField(required=False, min_value=1)
+
+    def validate_paquete_clave(self, clave):
+        paquete = PaquetePsicometrico.objects.filter(
+            clave=clave, activo=True
+        ).first()
+        if paquete is None:
+            raise serializers.ValidationError("Ese paquete no está a la venta.")
+        self.context["paquete"] = paquete
+        return clave
+
+    def validate(self, datos):
+        pide_reporte = "reporte_id" in datos
+        pide_paquete = "paquete_clave" in datos
+        if pide_reporte == pide_paquete:
+            raise serializers.ValidationError(
+                "Manda reporte_id o paquete_clave, uno de los dos."
+            )
+        if pide_reporte and "cantidad" in datos:
+            raise serializers.ValidationError(
+                {"cantidad": "La cantidad solo aplica a un paquete."}
+            )
+
+        if pide_paquete:
+            paquete = self.context["paquete"]
+            try:
+                # Se cotiza aqui para responder 400 con el motivo exacto en vez
+                # de dejar que el servicio lo descubra a medio reservar.
+                paquete.cotizar(datos.get("cantidad"))
+            except ValueError as error:
+                raise serializers.ValidationError(
+                    {"cantidad": str(error)}
+                ) from error
+
+        return datos
 
     def validate_reporte_id(self, reporte_id):
         try:
@@ -1295,14 +1339,45 @@ class CrearOrdenPagoPaypalSerializer(serializers.Serializer):
         return reporte_id
 
 
+class CompraPaquetePsicometricoSerializer(serializers.ModelSerializer):
+    """La compra tal como se le muestra a quien la hizo."""
+
+    paquete_clave = serializers.CharField(source="paquete_id", read_only=True)
+    creditos_disponibles = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = CompraPaquetePsicometrico
+        fields = (
+            "id",
+            "paquete_clave",
+            "paquete_nombre",
+            "cantidad_pruebas",
+            "precio_unitario",
+            "monto",
+            "moneda",
+            "estado",
+            "creditos_totales",
+            "creditos_consumidos",
+            "creditos_disponibles",
+            "vigente_hasta",
+            "pagada_en",
+            "creado_en",
+        )
+        read_only_fields = fields
+
+
 class OrdenPagoPaypalSerializer(serializers.ModelSerializer):
-    reporte_id = serializers.UUIDField(source="reporte.id", read_only=True)
+    # Sin `source`: la orden ahora puede no tener reporte, y leer `reporte.id`
+    # de un None dejaria el campo fuera de la respuesta en vez de en null.
+    reporte_id = serializers.UUIDField(read_only=True, allow_null=True)
+    compra = CompraPaquetePsicometricoSerializer(read_only=True)
 
     class Meta:
         model = OrdenPagoPaypal
         fields = (
             "referencia_interna",
             "reporte_id",
+            "compra",
             "paypal_order_id",
             "monto",
             "moneda",
@@ -1313,3 +1388,58 @@ class OrdenPagoPaypalSerializer(serializers.ModelSerializer):
             "actualizado_en",
             "pagado_en",
         )
+
+
+class CapturarOrdenPagoPaypalSerializer(serializers.Serializer):
+    """Cobro de la orden con la que PayPal devuelve a la persona.
+
+    Se identifica por `paypal_order_id` y no por la referencia interna porque
+    eso es lo que PayPal pone en la URL de retorno (`?token=...`): pedir otra
+    cosa obligaria al frontend a acordarse de un dato entre dos redirecciones.
+    """
+
+    paypal_order_id = serializers.CharField(max_length=64)
+
+    def validate_paypal_order_id(self, paypal_order_id):
+        orden = (
+            OrdenPagoPaypal.objects.select_related("compra")
+            .filter(
+                paypal_order_id=paypal_order_id,
+                comprador=self.context["request"].user,
+            )
+            .first()
+        )
+        if orden is None:
+            # No confirmar que existe la orden de otra persona.
+            raise serializers.ValidationError("La orden no existe.")
+        self.context["orden"] = orden
+        return paypal_order_id
+
+
+class PaquetePsicometricoSerializer(serializers.ModelSerializer):
+    """El catalogo como lo lee la pagina de paquetes.
+
+    Es de solo lectura a proposito: los precios se publican desde aqui y no
+    se reciben. El cliente solo elige una clave y, en el paquete a la medida,
+    una cantidad.
+    """
+
+    es_a_medida = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = PaquetePsicometrico
+        fields = (
+            "clave",
+            "nombre",
+            "descripcion",
+            "incluye",
+            "es_a_medida",
+            "cantidad_pruebas",
+            "precio_total",
+            "cantidad_minima",
+            "cantidad_maxima",
+            "precio_unitario",
+            "moneda",
+            "vigencia_meses",
+        )
+        read_only_fields = fields
