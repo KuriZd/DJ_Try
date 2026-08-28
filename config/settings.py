@@ -14,6 +14,7 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from corsheaders.defaults import default_headers as cors_default_headers
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -34,7 +35,16 @@ SECRET_KEY = 'django-insecure-n#)57!2^j+5bs7rul2pirmx*k=#edt9-)f0$+&m6yc!m8^^n*g
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# Hosts permitidos, separados por comas. Vacio y con DEBUG=True Django ya
+# acepta localhost, que es el caso normal; la variable existe para los tuneles
+# de desarrollo (cloudflared, ngrok), cuyo dominio cambia en cada reinicio y
+# no tiene por que quedar escrito en el codigo. Un punto inicial vale como
+# comodin de subdominio: `.trycloudflare.com`.
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -217,6 +227,13 @@ SWAGGER_SETTINGS = {
     'USE_SESSION_AUTH': False,
 }
 
+
+# El checkout manda `Idempotency-Key` para que dos envios de la misma compra
+# no abran dos ordenes. No esta en la lista por defecto de django-cors-headers,
+# y sin declararla el navegador aprueba el preflight pero se niega a mandar el
+# POST: en el servidor no queda ni rastro, y en la pagina sale un
+# "failed to fetch" que no dice de que.
+CORS_ALLOW_HEADERS = (*cors_default_headers, 'idempotency-key')
 
 # Frontends permitidos durante el desarrollo local
 CORS_ALLOWED_ORIGINS = [

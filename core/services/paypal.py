@@ -106,7 +106,16 @@ class PaypalClient:
         if cuerpo is not None:
             kwargs["json"] = cuerpo
 
-        llamar = requests.post if metodo == "POST" else requests.get
+        # Se resuelve por nombre y se falla si no existe: un `else: get` deja
+        # que un metodo mal escrito haga una consulta en vez de la escritura
+        # que se pedia, devuelva 200, y parezca que funciono.
+        llamar = getattr(requests, metodo.lower(), None)
+        if llamar is None:
+            raise PaypalError(
+                f"Método HTTP no soportado: {metodo}.",
+                code="METODO_NO_SOPORTADO",
+            )
+
         try:
             response = llamar(f"{settings.PAYPAL_API_BASE_URL}{ruta}", **kwargs)
         except requests.RequestException as error:
