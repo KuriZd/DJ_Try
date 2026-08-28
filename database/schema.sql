@@ -342,13 +342,96 @@ CREATE TABLE historial_reportes_psicometricos (
 CREATE INDEX historial_reportes_psicometricos_idx
   ON historial_reportes_psicometricos (reporte_id, creado_en);
 
+-- Catalogo de paquetes psicometricos. El precio vive aqui y no en el
+-- frontend: es el unico numero que puede cobrarse, y el cliente no puede
+-- proponerlo.
+--
+-- Una fila describe un paquete cerrado (cantidad y total fijos) o uno a la
+-- medida (el comprador elige la cantidad dentro del rango y el total sale de
+-- multiplicar por el precio unitario). El CHECK impide filas a medias.
+CREATE TABLE paquetes_psicometricos (
+  clave VARCHAR(40) PRIMARY KEY,
+  nombre VARCHAR(120) NOT NULL,
+  descripcion TEXT,
+  incluye JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cantidad_pruebas SMALLINT CHECK (cantidad_pruebas > 0),
+  precio_total NUMERIC(12,2) CHECK (precio_total > 0),
+  cantidad_minima SMALLINT CHECK (cantidad_minima > 0),
+  cantidad_maxima SMALLINT CHECK (cantidad_maxima > 0),
+  precio_unitario NUMERIC(12,2) CHECK (precio_unitario > 0),
+  moneda CHAR(3) NOT NULL DEFAULT 'MXN' CHECK (moneda ~ '^[A-Z]{3}$'),
+  vigencia_meses SMALLINT CHECK (vigencia_meses IS NULL OR vigencia_meses > 0),
+  activo BOOLEAN NOT NULL DEFAULT true,
+  orden_visual SMALLINT NOT NULL DEFAULT 0,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT paquete_psicometrico_forma_valida CHECK (
+    (
+      cantidad_pruebas IS NOT NULL
+      AND precio_total IS NOT NULL
+      AND cantidad_minima IS NULL
+      AND cantidad_maxima IS NULL
+      AND precio_unitario IS NULL
+    )
+    OR (
+      cantidad_pruebas IS NULL
+      AND precio_total IS NULL
+      AND cantidad_minima IS NOT NULL
+      AND cantidad_maxima IS NOT NULL
+      AND precio_unitario IS NOT NULL
+      AND cantidad_maxima >= cantidad_minima
+    )
+  )
+);
+
+CREATE INDEX paquetes_psicometricos_visibles_idx
+  ON paquetes_psicometricos (orden_visual, clave)
+  WHERE activo;
+
+-- Compra de un paquete. Se crea al reservar la orden, en PENDIENTE, y pasa a
+-- PAGADA cuando PayPal confirma la captura. Guarda una fotografia del nombre
+-- y del precio: el catalogo cambia y el comprobante no puede cambiar con el.
+CREATE TABLE compras_paquete_psicometrico (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  comprador_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
+  paquete_clave VARCHAR(40) NOT NULL
+    REFERENCES paquetes_psicometricos(clave) ON DELETE RESTRICT,
+  paquete_nombre VARCHAR(120) NOT NULL,
+  cantidad_pruebas SMALLINT NOT NULL CHECK (cantidad_pruebas > 0),
+  precio_unitario NUMERIC(12,2) CHECK (precio_unitario > 0),
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
+  moneda CHAR(3) NOT NULL CHECK (moneda ~ '^[A-Z]{3}$'),
+  estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE'
+    CHECK (estado IN ('PENDIENTE', 'PAGADA', 'CANCELADA', 'REEMBOLSADA')),
+  creditos_totales SMALLINT NOT NULL CHECK (creditos_totales > 0),
+  creditos_consumidos SMALLINT NOT NULL DEFAULT 0
+    CHECK (creditos_consumidos >= 0),
+  vigente_hasta TIMESTAMPTZ,
+  pagada_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT compra_paquete_creditos_coherentes
+    CHECK (creditos_consumidos <= creditos_totales),
+  CONSTRAINT compra_paquete_pagada_con_fecha
+    CHECK (estado <> 'PAGADA' OR pagada_en IS NOT NULL)
+);
+
+CREATE INDEX compras_paquete_comprador_idx
+  ON compras_paquete_psicometrico (comprador_id, creado_en DESC);
+
+-- Para resolver "cuantas pruebas le quedan" sin recorrer todo el historial.
+CREATE INDEX compras_paquete_con_saldo_idx
+  ON compras_paquete_psicometrico (comprador_id)
+  WHERE estado = 'PAGADA' AND creditos_consumidos < creditos_totales;
+
 -- Pagos PayPal. La orden conserva una fotografia del precio y de la
 -- referencia de evaluacion usada al iniciar el cobro.
 CREATE TABLE ordenes_pago_paypal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   referencia_interna VARCHAR(50) NOT NULL UNIQUE,
   comprador_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
-  reporte_id UUID NOT NULL REFERENCES reportes_psicometricos(id) ON DELETE RESTRICT,
+  reporte_id UUID REFERENCES reportes_psicometricos(id) ON DELETE RESTRICT,
+  compra_id UUID REFERENCES compras_paquete_psicometrico(id) ON DELETE RESTRICT,
   referencia_evaluacion_externa VARCHAR(180),
   paypal_order_id VARCHAR(64) UNIQUE,
   monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
@@ -370,7 +453,9 @@ CREATE TABLE ordenes_pago_paypal (
   creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
   actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
   pagado_en TIMESTAMPTZ,
-  CHECK (estado <> 'COMPLETED' OR pagado_en IS NOT NULL)
+  CHECK (estado <> 'COMPLETED' OR pagado_en IS NOT NULL),
+  CONSTRAINT orden_pago_paypal_objeto_unico
+    CHECK (num_nonnulls(reporte_id, compra_id) = 1)
 );
 
 CREATE UNIQUE INDEX orden_pago_paypal_activa_unica
@@ -383,6 +468,13 @@ CREATE UNIQUE INDEX orden_pago_paypal_idempotencia_unica
 
 CREATE INDEX ordenes_pago_paypal_reporte_idx
   ON ordenes_pago_paypal (reporte_id, creado_en DESC);
+
+-- El indice de orden activa por reporte no cubre las de paquete: en un indice
+-- unico los NULL no chocan entre si. Cada compra lleva su propia orden.
+CREATE UNIQUE INDEX orden_pago_paypal_compra_activa_unica
+  ON ordenes_pago_paypal (compra_id)
+  WHERE compra_id IS NOT NULL
+    AND estado IN ('PENDING', 'CREATED', 'APPROVED', 'COMPLETED');
 
 CREATE TABLE transacciones_pago_paypal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
