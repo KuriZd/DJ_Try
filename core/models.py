@@ -116,6 +116,13 @@ class EstadoPagoPaypal(models.TextChoices):
     REFUNDED = "REFUNDED", "Reembolsada"
 
 
+class EstadoCompraPaquete(models.TextChoices):
+    PENDIENTE = "PENDIENTE", "Pendiente de pago"
+    PAGADA = "PAGADA", "Pagada"
+    CANCELADA = "CANCELADA", "Cancelada"
+    REEMBOLSADA = "REEMBOLSADA", "Reembolsada"
+
+
 class TipoTransaccionPaypal(models.TextChoices):
     CAPTURE = "CAPTURE", "Captura"
     REFUND = "REFUND", "Reembolso"
@@ -642,6 +649,124 @@ class HistorialReportePsicometrico(TablaExistente):
         db_table = "historial_reportes_psicometricos"
 
 
+class PaquetePsicometrico(TablaExistente):
+    """Paquete del catalogo, en cualquiera de sus dos formas.
+
+    Cerrado: cantidad y total fijos (`cantidad_pruebas`, `precio_total`).
+    A la medida: el comprador elige cuantas pruebas quiere dentro del rango
+    y el total sale de multiplicar por `precio_unitario`. La base impide con
+    un CHECK que una fila mezcle las dos formas.
+
+    El precio vive aqui y no en el frontend. Es el unico importe que puede
+    cobrarse: el cliente manda que paquete quiere, nunca cuanto cuesta.
+    """
+
+    clave = models.CharField(primary_key=True, max_length=40)
+    nombre = models.CharField(max_length=120)
+    descripcion = models.TextField(null=True, blank=True)
+    # Lista de textos para la tarjeta. Es un JSONB y no una tabla aparte
+    # porque solo se lee completa, junto con su paquete.
+    incluye = models.JSONField(default=list)
+    cantidad_pruebas = models.SmallIntegerField(null=True, blank=True)
+    precio_total = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    cantidad_minima = models.SmallIntegerField(null=True, blank=True)
+    cantidad_maxima = models.SmallIntegerField(null=True, blank=True)
+    precio_unitario = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    moneda = models.CharField(max_length=3, default="MXN")
+    vigencia_meses = models.SmallIntegerField(null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    orden_visual = models.SmallIntegerField(default=0)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "paquetes_psicometricos"
+
+    def __str__(self):
+        return self.nombre
+
+    @property
+    def es_a_medida(self):
+        return self.precio_unitario is not None
+
+    def cotizar(self, cantidad=None):
+        """Cantidad y total a cobrar, o `ValueError` si la peticion no cuadra.
+
+        Se resuelve aqui y no en la vista para que el importe salga del mismo
+        lugar sin importar quien pregunte: el catalogo, el checkout o una
+        prueba.
+        """
+        if not self.es_a_medida:
+            if cantidad is not None and int(cantidad) != self.cantidad_pruebas:
+                raise ValueError(
+                    "Este paquete tiene una cantidad fija de pruebas."
+                )
+            return self.cantidad_pruebas, self.precio_total
+
+        if cantidad is None:
+            raise ValueError("Indica cuantas pruebas quieres comprar.")
+        cantidad = int(cantidad)
+        if cantidad < self.cantidad_minima or cantidad > self.cantidad_maxima:
+            raise ValueError(
+                f"La cantidad debe estar entre {self.cantidad_minima} y "
+                f"{self.cantidad_maxima} pruebas."
+            )
+        return cantidad, self.precio_unitario * cantidad
+
+
+class CompraPaquetePsicometrico(TablaExistente):
+    """Compra de un paquete y la bolsa de creditos que deja.
+
+    Nace en PENDIENTE junto con la orden de pago y pasa a PAGADA cuando
+    PayPal confirma la captura. Guarda una fotografia del nombre y del precio
+    porque el catalogo cambia y un comprobante ya emitido no puede cambiar
+    con el.
+    """
+
+    id = models.UUIDField(primary_key=True)
+    comprador = models.ForeignKey(
+        Usuario,
+        models.PROTECT,
+        db_column="comprador_id",
+        related_name="compras_paquete_psicometrico",
+    )
+    paquete = models.ForeignKey(
+        PaquetePsicometrico,
+        models.PROTECT,
+        db_column="paquete_clave",
+        related_name="compras",
+    )
+    paquete_nombre = models.CharField(max_length=120)
+    cantidad_pruebas = models.SmallIntegerField()
+    precio_unitario = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    moneda = models.CharField(max_length=3)
+    estado = models.CharField(
+        max_length=20,
+        choices=EstadoCompraPaquete.choices,
+        default=EstadoCompraPaquete.PENDIENTE,
+    )
+    creditos_totales = models.SmallIntegerField()
+    creditos_consumidos = models.SmallIntegerField(default=0)
+    vigente_hasta = models.DateTimeField(null=True, blank=True)
+    pagada_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "compras_paquete_psicometrico"
+
+    @property
+    def creditos_disponibles(self):
+        return self.creditos_totales - self.creditos_consumidos
+
+
 class OrdenPagoPaypal(TablaExistente):
     id = models.UUIDField(primary_key=True)
     referencia_interna = models.CharField(max_length=50, unique=True)
@@ -651,10 +776,23 @@ class OrdenPagoPaypal(TablaExistente):
         db_column="comprador_id",
         related_name="ordenes_pago_paypal",
     )
+    # Una orden cobra exactamente una de dos cosas: un reporte suelto que ya
+    # esta en el expediente, o la compra de un paquete. Un CHECK en la base
+    # exige que venga uno y solo uno.
     reporte = models.ForeignKey(
         ReportePsicometrico,
         models.PROTECT,
         db_column="reporte_id",
+        null=True,
+        blank=True,
+        related_name="ordenes_pago",
+    )
+    compra = models.ForeignKey(
+        CompraPaquetePsicometrico,
+        models.PROTECT,
+        db_column="compra_id",
+        null=True,
+        blank=True,
         related_name="ordenes_pago",
     )
     referencia_evaluacion_externa = models.CharField(
