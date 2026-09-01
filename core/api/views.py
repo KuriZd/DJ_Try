@@ -11,10 +11,13 @@ from rest_framework import mixins, viewsets
 from rest_framework.decorators import (
     api_view,
     authentication_classes,
+    parser_classes,
     permission_classes,
+    throttle_classes,
 )
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
+from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.status import (
@@ -34,6 +37,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.models import (
     Aspirante,
     CompraPaquetePsicometrico,
+    Usuario as UsuarioModel,
     EstadoCompraPaquete,
     EstadoReportePsicometrico,
     EstadoVacante,
@@ -63,6 +67,7 @@ from core.services.paypal import PaypalConfigurationError, PaypalError
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
+    UsuarioResumenSerializer,
     CapturarOrdenPagoPaypalSerializer,
     CompraPaquetePsicometricoSerializer,
     CrearOrdenPagoPaypalSerializer,
@@ -78,6 +83,12 @@ from .serializers import (
     VacanteAdminSerializer,
     VacantePublicaSerializer,
     permisos_de,
+)
+from .throttles import (
+    LoginRateThrottle,
+    PaypalWebhookRateThrottle,
+    RefreshRateThrottle,
+    RegistroRateThrottle,
 )
 
 
@@ -100,6 +111,7 @@ def api_root(request):
             "compras_psicometricas": reverse(
                 "api:compra-psicometrica-list", request=request
             ),
+            "usuarios": reverse("api:usuario-list", request=request),
             "ordenes_paypal": reverse("api:ordenes-paypal", request=request),
             "webhook_paypal": reverse("api:webhook-paypal", request=request),
             "vacantes": reverse("api:vacante-list", request=request),
@@ -171,6 +183,7 @@ def abrir_sesion(usuario, request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -181,6 +194,7 @@ def login(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([RegistroRateThrottle])
 @transaction.atomic
 def registro(request):
     """Da de alta una cuenta con su expediente y la deja autenticada."""
@@ -193,6 +207,7 @@ def registro(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([RefreshRateThrottle])
 def refresh_token(request):
     raw_refresh = request.data.get("refresh")
     if not raw_refresh:
@@ -518,6 +533,8 @@ CABECERAS_FIRMA_WEBHOOK = {
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@parser_classes([JSONParser])
+@throttle_classes([PaypalWebhookRateThrottle])
 def webhook_paypal(request):
     """Avisos de PayPal sobre el ciclo de vida de un cobro.
 
@@ -572,6 +589,53 @@ class PaquetePsicometricoViewSet(
     queryset = PaquetePsicometrico.objects.filter(activo=True).order_by(
         "orden_visual", "clave"
     )
+
+
+class PuedeAdministrarUsuarios(BasePermission):
+    """Padron de cuentas: solo quien administra usuarios y roles.
+
+    No sirve `aspirantes:consultar` ni `postulaciones:consultar-todas`: los
+    trae el reclutador, que necesita ver a quien se postula pero no el padron
+    entero de la plataforma —empresas, personal interno, cuentas bloqueadas—.
+    """
+
+    message = "No tienes permiso para consultar el padron de usuarios."
+
+    def has_permission(self, request, view):
+        return "usuarios:administrar" in permisos_de(request.user)
+
+
+class UsuarioViewSet(viewsets.ReadOnlyModelViewSet):
+    """Padron de cuentas de la plataforma, para buscar una en concreto.
+
+    Es de solo lectura: dar de alta cuentas pasa por el registro y cambiar
+    roles todavia no tiene endpoint. Cuando lo tenga, este ViewSet crece; por
+    ahora no finge poder hacer mas de lo que hace.
+
+    Las cuentas dadas de baja no salen. El borrado es logico —`eliminado_en`
+    con fecha— justamente para no perder la historia de quien hizo que, pero
+    esa historia se consulta en su sitio y no en un buscador de personas.
+
+    Sin filtro por usuario en el queryset, al reves que en aspirantes o
+    postulaciones: aqui no hay "lo propio" que recortar, porque el permiso ya
+    limita quien entra.
+    """
+
+    serializer_class = UsuarioResumenSerializer
+    permission_classes = [IsAuthenticated, PuedeAdministrarUsuarios]
+
+    def get_queryset(self):
+        return (
+            UsuarioModel.objects.filter(eliminado_en__isnull=True)
+            # `usuarios_roles__rol` se prefetchea porque el serializer lo
+            # recorre en cada fila: sin esto son dos consultas por usuario.
+            .prefetch_related("usuarios_roles__rol")
+            .select_related("aspirante", "empresa")
+            # Por nombre: el padron se lee buscando a alguien, y el orden
+            # alfabetico es el unico que ayuda a eso. El id desempata para que
+            # dos homonimos no bailen entre peticiones.
+            .order_by("nombre_completo", "id")
+        )
 
 
 class CompraPaquetePsicometricoViewSet(viewsets.ReadOnlyModelViewSet):
