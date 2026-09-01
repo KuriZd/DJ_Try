@@ -3,6 +3,8 @@ from rest_framework.routers import SimpleRouter
 
 from .views import (
     AspiranteViewSet,
+    CompraPaquetePsicometricoViewSet,
+    UsuarioViewSet,
     PaquetePsicometricoViewSet,
     PostulacionViewSet,
     ReportePsicometricoViewSet,
@@ -27,12 +29,18 @@ from .views import (
 app_name = "api"
 
 router = SimpleRouter()
+router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
 router.register(
     "paquetes-psicometricos",
     PaquetePsicometricoViewSet,
     basename="paquete-psicometrico",
+)
+router.register(
+    "compras-psicometricas",
+    CompraPaquetePsicometricoViewSet,
+    basename="compra-psicometrica",
 )
 router.register(
     "reportes-psicometricos",
