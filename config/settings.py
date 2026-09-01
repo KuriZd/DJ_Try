@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import secrets
+import warnings
 from datetime import timedelta
 from pathlib import Path
 
@@ -29,11 +31,26 @@ load_dotenv(BASE_DIR / '.env.paypal', override=False)
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-n#)57!2^j+5bs7rul2pirmx*k=#edt9-)f0$+&m6yc!m8^^n*g'
+def env_bool(nombre, default=False):
+    return os.getenv(nombre, str(default)).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+
+# En una demo local se genera una clave efimera si aun no se configuro una.
+# Reiniciar el servidor invalida sus JWT, lo cual hace visible la omision sin
+# conservar una clave publica en Git. Fuera de DEBUG la clave es obligatoria.
+DEBUG = env_bool("DJANGO_DEBUG", True)
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    if not DEBUG:
+        raise RuntimeError("Falta DJANGO_SECRET_KEY en un entorno sin DEBUG.")
+    SECRET_KEY = secrets.token_urlsafe(64)
+    warnings.warn(
+        "DJANGO_SECRET_KEY no esta configurada; los tokens se invalidaran "
+        "al reiniciar el servidor.",
+        RuntimeWarning,
+    )
 
 # Hosts permitidos, separados por comas. Vacio y con DEBUG=True Django ya
 # acepta localhost, que es el caso normal; la variable existe para los tuneles
@@ -200,7 +217,30 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
         'rest_framework.parsers.MultiPartParser',
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        'login': os.getenv('THROTTLE_LOGIN', '5/minute'),
+        'registro': os.getenv('THROTTLE_REGISTRO', '5/hour'),
+        'refresh': os.getenv('THROTTLE_REFRESH', '30/minute'),
+        'paypal_webhook': os.getenv('THROTTLE_PAYPAL_WEBHOOK', '120/minute'),
+    },
 }
+
+# Django corta cuerpos no basados en archivos antes de que ocupen memoria sin
+# limite. Los PDFs usan el manejo de uploads y conservan su propio maximo.
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', str(1024 * 1024))
+)
+
+# Se dejan explicitas para que `manage.py check --deploy` detecte si faltan al
+# preparar staging/produccion, sin romper el desarrollo HTTP local.
+SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', False)
+SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', False)
+CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', False)
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+    'SECURE_HSTS_INCLUDE_SUBDOMAINS', False
+)
+SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD', False)
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(
