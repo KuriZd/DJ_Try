@@ -33,6 +33,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import (
     Aspirante,
+    CompraPaquetePsicometrico,
+    EstadoCompraPaquete,
     EstadoReportePsicometrico,
     EstadoVacante,
     HistorialReportePsicometrico,
@@ -62,6 +64,7 @@ from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
     CapturarOrdenPagoPaypalSerializer,
+    CompraPaquetePsicometricoSerializer,
     CrearOrdenPagoPaypalSerializer,
     LoginSerializer,
     PaquetePsicometricoSerializer,
@@ -93,6 +96,9 @@ def api_root(request):
             ),
             "paquetes_psicometricos": reverse(
                 "api:paquete-psicometrico-list", request=request
+            ),
+            "compras_psicometricas": reverse(
+                "api:compra-psicometrica-list", request=request
             ),
             "ordenes_paypal": reverse("api:ordenes-paypal", request=request),
             "webhook_paypal": reverse("api:webhook-paypal", request=request),
@@ -566,6 +572,47 @@ class PaquetePsicometricoViewSet(
     queryset = PaquetePsicometrico.objects.filter(activo=True).order_by(
         "orden_visual", "clave"
     )
+
+
+class CompraPaquetePsicometricoViewSet(viewsets.ReadOnlyModelViewSet):
+    """Compras de paquetes propias y la bolsa de creditos que dejan.
+
+    Existe porque hasta ahora una compra solo se podia leer anidada en la
+    orden que la pago (`GET /pagos/paypal/ordenes/<referencia>/`), y para eso
+    hay que acordarse de la referencia. El archivero de pruebas necesita la
+    pregunta al reves: que creditos tiene esta persona, sin saber con que
+    orden los compro.
+
+    Solo lo propio y sin excepcion: aqui no hay un permiso de "ver todas"
+    como en postulaciones, porque una compra es del comprador y de nadie mas.
+    El filtro va en el queryset, asi que tambien cubre el detalle: pedir la
+    compra de otra persona responde 404 y no 403, para no confirmar que
+    existe.
+
+    Solo las PAGADAS. Una PENDIENTE no da creditos —la orden puede quedarse
+    sin cobrar o cancelarse— y ensenarla en el archivero prometeria pruebas
+    que todavia no se pueden aplicar. Las canceladas y reembolsadas tampoco.
+
+    Las agotadas y las vencidas si salen: `creditos_disponibles` y
+    `vigente_hasta` viajan en la respuesta y quien pinta decide como
+    mostrarlas. Recortarlas aqui dejaria a la persona sin forma de ver que
+    compro.
+    """
+
+    serializer_class = CompraPaquetePsicometricoSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            CompraPaquetePsicometrico.objects.filter(
+                comprador=self.request.user,
+                estado=EstadoCompraPaquete.PAGADA,
+            )
+            .select_related("paquete")
+            # Lo ultimo comprado primero. El id desempata para que dos compras
+            # de la misma fecha no bailen entre peticiones.
+            .order_by("-pagada_en", "-id")
+        )
 
 
 class AspiranteViewSet(viewsets.ReadOnlyModelViewSet):
