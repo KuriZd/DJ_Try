@@ -578,6 +578,53 @@ def permisos_de(usuario):
     }
 
 
+class UsuarioResumenSerializer(serializers.ModelSerializer):
+    """Un usuario tal como lo lista el padron de la plataforma.
+
+    Mas corto que UsuarioSerializer a proposito. Ese sirve a `auth/me`, donde
+    la cuenta pregunta por si misma y necesita sus permisos y su expediente
+    completo; aqui se listan todas las cuentas para que un administrador
+    encuentre una, y ni los permisos efectivos —la union de los de sus roles,
+    una consulta por usuario— ni el expediente anidado ayudan a eso.
+
+    De los perfiles solo viaja si existen: para buscar "las empresas" basta
+    con saber que hay empresa detras, y quien quiera la ficha entra a ella.
+    """
+
+    roles = serializers.SerializerMethodField()
+    tiene_aspirante = serializers.SerializerMethodField()
+    tiene_empresa = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Usuario
+        fields = (
+            "id",
+            "nombre_completo",
+            "email",
+            "estado",
+            "email_verificado_en",
+            "ultimo_acceso_en",
+            "creado_en",
+            "roles",
+            "tiene_aspirante",
+            "tiene_empresa",
+        )
+
+    def get_roles(self, usuario):
+        return [
+            {"clave": usuario_rol.rol.clave, "nombre": usuario_rol.rol.nombre}
+            for usuario_rol in usuario.usuarios_roles.all()
+        ]
+
+    def get_tiene_aspirante(self, usuario):
+        # RelatedObjectDoesNotExist hereda de AttributeError, asi que getattr
+        # con default cubre la cuenta sin expediente.
+        return getattr(usuario, "aspirante", None) is not None
+
+    def get_tiene_empresa(self, usuario):
+        return getattr(usuario, "empresa", None) is not None
+
+
 class UsuarioSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
     permisos = serializers.SerializerMethodField()
