@@ -19,8 +19,10 @@ from .views import (
     logout,
     orden_paypal,
     ordenes_paypal,
+    recuperar_password,
     refresh_token,
     registro,
+    restablecer_password,
     usuario_actual,
     webhook_paypal,
 )
@@ -59,6 +61,12 @@ urlpatterns = [
     path("auth/logout/", logout, name="logout"),
     path("auth/me/", usuario_actual, name="usuario-actual"),
     path("auth/password/", cambiar_password, name="cambiar-password"),
+    path(
+        "auth/recuperar/", recuperar_password, name="recuperar-password"
+    ),
+    path(
+        "auth/restablecer/", restablecer_password, name="restablecer-password"
+    ),
     path("pagos/paypal/ordenes/", ordenes_paypal, name="ordenes-paypal"),
     # Las rutas literales van antes que la de referencia: si no, "capturar"
     # entraria como si fuera el nombre de una orden.
