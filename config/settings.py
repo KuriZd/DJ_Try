@@ -221,6 +221,11 @@ REST_FRAMEWORK = {
         'login': os.getenv('THROTTLE_LOGIN', '5/minute'),
         'registro': os.getenv('THROTTLE_REGISTRO', '5/hour'),
         'refresh': os.getenv('THROTTLE_REFRESH', '30/minute'),
+        # Pedir un enlace de recuperacion es barato para quien lo pide y caro
+        # para quien lo recibe: cada intento manda un correo. El limite frena
+        # tanto el abuso del buzon ajeno como la enumeracion de cuentas.
+        'recuperar': os.getenv('THROTTLE_RECUPERAR', '5/hour'),
+        'restablecer': os.getenv('THROTTLE_RESTABLECER', '10/hour'),
         'paypal_webhook': os.getenv('THROTTLE_PAYPAL_WEBHOOK', '120/minute'),
     },
 }
@@ -253,6 +258,65 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
 }
+
+# ---------------------------------------------------------------------------
+# Correo transaccional
+# ---------------------------------------------------------------------------
+# En desarrollo el correo se imprime en la consola: no hace falta un SMTP para
+# trabajar, y nada sale hacia fuera por descuido. En produccion se envia de
+# verdad. La variable permite forzar cualquiera de los dos.
+EMAIL_BACKEND = os.getenv(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.console.EmailBackend'
+    if DEBUG
+    else 'django.core.mail.backends.smtp.EmailBackend',
+)
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'localhost')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
+
+# Corto a proposito. El envio ocurre dentro de la peticion, asi que un SMTP
+# que no responde retrasaria un alta o un cobro tanto como tarde este numero.
+EMAIL_TIMEOUT = float(os.getenv('EMAIL_TIMEOUT', '5'))
+
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'AMIS <no-reply@amis.org>')
+
+# Jaula del entorno de pruebas.
+#
+# Con un valor, TODO el correo se entrega a esa direccion sin importar a quien
+# iba dirigido. Existe porque el seed esta lleno de direcciones @amis.org, que
+# es un dominio real: sin esto, la primera prueba con SMTP de verdad manda
+# correo a los buzones de la asociacion.
+#
+# Se activa por ausencia y no por presencia: vacio es el comportamiento de
+# produccion. Olvidarla en desarrollo manda correo real —se nota—, olvidarla
+# en produccion no rompe nada.
+EMAIL_REDIRIGIR_A = os.getenv('EMAIL_REDIRIGIR_A', '').strip()
+
+# Base para los enlaces que viajan en el correo. Apuntan al frontend y no al
+# API: quien recibe el mensaje abre una pagina, no un endpoint.
+FRONTEND_BASE_URL = os.getenv(
+    'FRONTEND_BASE_URL', 'http://localhost:5173'
+).rstrip('/')
+
+# Zona con la que se escriben las fechas de cara a la persona.
+#
+# `TIME_ZONE` es UTC y asi debe quedarse: lo que se guarda no tiene por que
+# saber donde vive nadie. Pero un cobro de las 20:00 en Ciudad de Mexico es de
+# las 02:00 UTC del dia siguiente, y el comprobante en pantalla —que usa la
+# zona del navegador— diria un dia y el del correo otro.
+ZONA_HORARIA_VISUAL = os.getenv('ZONA_HORARIA_VISUAL', 'America/Mexico_City')
+
+# Vigencias de los enlaces con token. La recuperacion dura menos porque lo que
+# permite es mayor: cambiar la contrasena de una cuenta.
+TOKEN_VERIFICACION_HORAS = int(os.getenv('TOKEN_VERIFICACION_HORAS', '48'))
+TOKEN_RECUPERACION_HORAS = int(os.getenv('TOKEN_RECUPERACION_HORAS', '1'))
+
+# Cuantas veces se reintenta un envio fallido antes de rendirse.
+EMAIL_MAX_INTENTOS = int(os.getenv('EMAIL_MAX_INTENTOS', '3'))
+
 
 # Documentacion OpenAPI (drf-yasg)
 SWAGGER_SETTINGS = {
