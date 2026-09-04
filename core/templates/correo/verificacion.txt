@@ -1,0 +1,11 @@
+Hola{% if nombre %} {{ nombre }}{% endif %}:
+
+Confirma que esta dirección es tuya para poder postularte a vacantes y
+comprar pruebas psicométricas.
+
+{{ enlace }}
+
+El enlace vence en {{ horas }} horas. Si no creaste esta cuenta, ignora
+este mensaje: sin confirmar, la dirección no queda ligada a nadie.
+
+{% include "correo/_firma.txt" %}
