@@ -1,0 +1,14 @@
+{% extends "correo/_base.html" %}
+{% block cuerpo %}
+  <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#a97c2f;">Prueba de configuración</p>
+  <h1 style="margin:0 0 14px;font-size:23px;font-weight:800;letter-spacing:-.02em;color:#0f3d2e;">El envío funciona</h1>
+  <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#35453e;">
+    Si estás leyendo esto, el servidor se conectó al SMTP, autenticó y el
+    mensaje llegó a un buzón real.
+  </p>
+  <table role="presentation" cellpadding="0" cellspacing="0" style="font-size:13px;color:#5f6f68;">
+    <tr><td style="padding:2px 16px 2px 0;">Enviado</td><td style="font-family:Consolas,Menlo,monospace;color:#0e1a16;">{{ momento }}</td></tr>
+    <tr><td style="padding:2px 16px 2px 0;">Canal</td><td style="font-family:Consolas,Menlo,monospace;color:#0e1a16;">{{ host }}:{{ puerto }}</td></tr>
+    <tr><td style="padding:2px 16px 2px 0;">Remitente</td><td style="font-family:Consolas,Menlo,monospace;color:#0e1a16;">{{ remitente }}</td></tr>
+  </table>
+{% endblock %}

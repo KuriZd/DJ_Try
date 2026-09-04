@@ -46,6 +46,7 @@ from core.models import (
     OrigenReportePsicometrico,
     PaquetePsicometrico,
     Postulacion,
+    PropositoToken,
     ReportePsicometrico,
     Sesion,
     Vacante,
@@ -63,10 +64,14 @@ from core.services.pagos import (
     procesar_evento_paypal,
 )
 from core.services.paypal import PaypalConfigurationError, PaypalError
+from core.services import avisos
+from core.services import tokens as tokens_service
 
 from .serializers import (
     AspiranteSerializer,
     CambioPasswordSerializer,
+    RecuperarPasswordSerializer,
+    RestablecerPasswordSerializer,
     UsuarioResumenSerializer,
     CapturarOrdenPagoPaypalSerializer,
     CompraPaquetePsicometricoSerializer,
@@ -86,6 +91,8 @@ from .serializers import (
 )
 from .throttles import (
     LoginRateThrottle,
+    RecuperarRateThrottle,
+    RestablecerRateThrottle,
     PaypalWebhookRateThrottle,
     RefreshRateThrottle,
     RegistroRateThrottle,
@@ -305,6 +312,84 @@ def cambiar_password(request):
         sesiones = sesiones.exclude(refresh_token_hash=token_hash(raw_refresh))
 
     sesiones.update(revocada_en=timezone.now())
+
+    return Response(status=HTTP_204_NO_CONTENT)
+
+
+@swagger_auto_schema(
+    method="post",
+    request_body=RecuperarPasswordSerializer,
+    responses={204: "Siempre, exista o no la cuenta."},
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([RecuperarRateThrottle])
+def recuperar_password(request):
+    """Manda un enlace para elegir una contrasena nueva.
+
+    **Responde 204 exista o no la cuenta.** Cualquier otra cosa —un 404, un
+    mensaje distinto— convertiria este endpoint en un comprobador de que
+    direcciones estan registradas en la plataforma, que es justo lo que se
+    evita en el acceso con un mensaje de error generico.
+
+    Queda una diferencia de tiempo: si la cuenta existe hay que redactar y
+    entregar un correo, y eso tarda. Medirla exige muchas peticiones, y el
+    limite de frecuencia por IP y correo las acota a cinco por hora. Se deja
+    asi a conciencia; cerrarla del todo pide una cola de tareas, que hoy no
+    existe.
+    """
+    serializer = RecuperarPasswordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    email = serializer.validated_data["email"]
+
+    usuario = UsuarioModel.objects.filter(
+        email__iexact=email, eliminado_en__isnull=True
+    ).first()
+
+    if usuario is not None:
+        token = tokens_service.emitir(usuario, PropositoToken.RECUPERACION)
+        avisos.enviar_recuperacion(usuario, token)
+
+    return Response(status=HTTP_204_NO_CONTENT)
+
+
+@swagger_auto_schema(
+    method="post",
+    request_body=RestablecerPasswordSerializer,
+    responses={
+        204: "Contrasena cambiada.",
+        400: "El enlace no es valido, ya se uso o caduco.",
+    },
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([RestablecerRateThrottle])
+def restablecer_password(request):
+    """Cambia la contrasena con el token del correo.
+
+    Se revocan **todas** las sesiones abiertas, sin excepcion. A diferencia de
+    `cambiar_password` —donde quien cambia esta dentro y se le conserva la
+    suya— aqui el motivo tipico es haber perdido el control de la cuenta: si
+    alguien mas tenia una sesion, tiene que caerse.
+    """
+    serializer = RestablecerPasswordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    try:
+        usuario = tokens_service.canjear(
+            serializer.validated_data["token"], PropositoToken.RECUPERACION
+        )
+    except tokens_service.TokenInvalido as error:
+        return Response(
+            {"token": [str(error)]}, status=HTTP_400_BAD_REQUEST
+        )
+
+    serializer.save(usuario=usuario)
+
+    ahora = timezone.now()
+    Sesion.objects.filter(
+        usuario=usuario, revocada_en__isnull=True
+    ).update(revocada_en=ahora)
 
     return Response(status=HTTP_204_NO_CONTENT)
 

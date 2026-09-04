@@ -35,5 +35,30 @@ class RefreshRateThrottle(IpRateThrottle):
     scope = "refresh"
 
 
+class RecuperarRateThrottle(IpRateThrottle):
+    """Igual que el de acceso: combina IP y correo sin guardarlo en claro.
+
+    Sin la parte del correo, un atacante con una IP podria sondear cinco
+    cuentas distintas por hora; con ella, cinco intentos por cuenta y por IP.
+    """
+
+    scope = "recuperar"
+
+    def get_cache_key(self, request, view):
+        ident = self.get_ident(request)
+        email = str(request.data.get("email", "")).strip().casefold()
+        cuenta = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": f"{ident}:{cuenta}",
+        }
+
+
+class RestablecerRateThrottle(IpRateThrottle):
+    """Frena la fuerza bruta sobre el token del enlace."""
+
+    scope = "restablecer"
+
+
 class PaypalWebhookRateThrottle(IpRateThrottle):
     scope = "paypal_webhook"

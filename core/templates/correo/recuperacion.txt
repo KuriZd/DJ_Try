@@ -1,0 +1,14 @@
+Hola{% if nombre %} {{ nombre }}{% endif %}:
+
+Pediste recuperar el acceso a tu cuenta. Abre este enlace para elegir una
+contraseña nueva:
+
+{{ enlace }}
+
+El enlace vence en {{ horas }} hora{{ horas|pluralize:"s" }} y sirve una sola vez.
+
+Si no lo pediste, no hay nada que hacer: tu contraseña sigue siendo la misma
+y este enlace caducará solo. Que alguien conozca tu correo no le sirve para
+entrar.
+
+{% include "correo/_firma.txt" %}

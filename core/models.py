@@ -72,6 +72,17 @@ class EstadoEnvio(models.TextChoices):
     FALLIDO = "fallido", "Fallido"
 
 
+class PropositoToken(models.TextChoices):
+    """Para que sirve un token de un solo uso.
+
+    Verificar un correo y recuperar una contrasena comparten mecanismo, tabla
+    y reglas; lo unico que cambia es que permite cada uno y cuanto dura.
+    """
+
+    VERIFICACION = "verificacion", "Verificacion de correo"
+    RECUPERACION = "recuperacion", "Recuperacion de contrasena"
+
+
 class EstadoReportePsicometrico(models.TextChoices):
     DISPONIBLE = "available", "Disponible"
     REEMPLAZADO = "replaced", "Reemplazado"
@@ -273,6 +284,11 @@ class TokenRecuperacion(TablaExistente):
         models.CASCADE,
         db_column="usuario_id",
         related_name="tokens_recuperacion",
+    )
+    proposito = models.CharField(
+        max_length=20,
+        choices=PropositoToken.choices,
+        default=PropositoToken.RECUPERACION,
     )
     token_hash = models.TextField(unique=True)
     expira_en = models.DateTimeField()
@@ -1090,6 +1106,37 @@ class EnvioCertificado(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "envios_certificado"
+
+
+class EnvioCorreo(TablaExistente):
+    """Un intento de envio de correo transaccional.
+
+    Existe porque el envio ocurre dentro de la peticion y su fallo no se
+    propaga: si no quedara constancia, un correo que nunca salio seria
+    indistinguible de uno entregado.
+
+    `destinatario_email` guarda a quien iba dirigido de verdad, aunque
+    `EMAIL_REDIRIGIR_A` lo haya desviado a la cuenta de pruebas. El registro
+    cuenta lo que la aplicacion decidio, no lo que hizo la jaula.
+    """
+
+    id = models.UUIDField(primary_key=True)
+    plantilla = models.CharField(max_length=60)
+    destinatario_email = models.EmailField(max_length=254)
+    asunto = models.CharField(max_length=255)
+    entidad = models.CharField(max_length=60, null=True, blank=True)
+    entidad_id = models.TextField(null=True, blank=True)
+    estado = models.CharField(
+        max_length=20, choices=EstadoEnvio.choices, default=EstadoEnvio.PENDIENTE
+    )
+    numero_intento = models.SmallIntegerField(default=1)
+    proveedor_id = models.CharField(max_length=180, null=True, blank=True)
+    mensaje_error = models.TextField(null=True, blank=True)
+    enviado_en = models.DateTimeField(null=True, blank=True)
+    creado_en = models.DateTimeField()
+
+    class Meta(TablaExistente.Meta):
+        db_table = "envios_correo"
 
 
 class Auditoria(TablaExistente):

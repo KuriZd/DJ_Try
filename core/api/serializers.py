@@ -979,6 +979,54 @@ class PerfilUpdateSerializer(serializers.Serializer):
         return instance
 
 
+class RecuperarPasswordSerializer(serializers.Serializer):
+    """Solicitud de un enlace para recuperar el acceso.
+
+    Solo valida la forma del correo. Que exista o no una cuenta detras no se
+    comprueba aqui **ni se refleja en la respuesta**: decirlo convertiria este
+    endpoint en un comprobador de que direcciones estan registradas.
+    """
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.strip()
+
+
+class RestablecerPasswordSerializer(serializers.Serializer):
+    """Cambio de contrasena con el token del correo.
+
+    No pide la contrasena actual —quien llega aqui es porque no la recuerda—,
+    asi que lo unico que autoriza el cambio es el token, y por eso caduca en
+    una hora y se gasta al usarse.
+    """
+
+    token = serializers.CharField(write_only=True, trim_whitespace=False)
+    password_nueva = serializers.CharField(
+        write_only=True, trim_whitespace=False
+    )
+
+    def validate(self, attrs):
+        # El usuario lo resuelve la vista al canjear el token; aqui solo se
+        # comprueba que la contrasena aguante las reglas del proyecto.
+        try:
+            validate_password(attrs["password_nueva"])
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(
+                {"password_nueva": list(error.messages)}
+            )
+        return attrs
+
+    def save(self, usuario):
+        """Escribe la contrasena nueva. El hash vive aqui, no en la vista."""
+        usuario.password_hash = make_password(
+            self.validated_data["password_nueva"]
+        )
+        usuario.actualizado_en = timezone.now()
+        usuario.save(update_fields=["password_hash", "actualizado_en"])
+        return usuario
+
+
 class CambioPasswordSerializer(serializers.Serializer):
     """Cambio de contraseña verificando siempre la contraseña actual."""
 
