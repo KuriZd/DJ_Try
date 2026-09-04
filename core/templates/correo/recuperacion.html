@@ -1,0 +1,18 @@
+{% extends "correo/_base.html" %}
+{% block cuerpo %}
+  <p style="margin:0 0 14px;font-size:16px;">Hola{% if nombre %} {{ nombre }}{% endif %}:</p>
+  <p style="margin:0 0 22px;font-size:15px;line-height:1.6;color:#35453e;">
+    Pediste recuperar el acceso a tu cuenta. Elige una contraseña nueva desde aquí:
+  </p>
+  <p style="margin:0 0 22px;">
+    <a href="{{ enlace }}" style="display:inline-block;padding:13px 26px;border-radius:10px;background:#0f3d2e;color:#ffffff;font-weight:700;font-size:15px;text-decoration:none;">Elegir contraseña nueva</a>
+  </p>
+  <p style="margin:0 0 14px;font-size:13px;color:#5f6f68;line-height:1.6;">
+    El enlace vence en {{ horas }} hora{{ horas|pluralize:"s" }} y sirve una sola vez.
+  </p>
+  <p style="margin:0 0 14px;font-size:13px;color:#5f6f68;line-height:1.6;">
+    Si no lo pediste, no hay nada que hacer: tu contraseña sigue siendo la
+    misma y este enlace caducará solo.
+  </p>
+  <p style="margin:0;font-size:12px;color:#8a978f;word-break:break-all;">{{ enlace }}</p>
+{% endblock %}
