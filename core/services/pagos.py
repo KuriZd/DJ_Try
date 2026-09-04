@@ -775,6 +775,16 @@ def aplicar_resultado_de_captura(
             paypal_event_id=paypal_event_id,
         )
 
+        # Despues del commit, nunca dentro. Si algo deshiciera esta
+        # transaccion, el correo ya habria anunciado un cobro que no cuajo, y
+        # eso no se puede retirar del buzon de nadie.
+        #
+        # El `import` va aqui y no arriba porque `avisos` importa modelos que
+        # este modulo ya expone: subirlo cerraria un ciclo.
+        from core.services import avisos
+
+        transaction.on_commit(lambda: avisos.enviar_comprobante(orden))
+
     return orden, True
 
 
