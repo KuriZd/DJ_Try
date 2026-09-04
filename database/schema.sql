@@ -16,6 +16,7 @@ CREATE TYPE estado_expediente AS ENUM ('activo', 'incompleto', 'suspendido', 'ce
 CREATE TYPE estado_certificado AS ENUM ('en_proceso', 'emitido', 'enviado', 'reenviado', 'cancelado', 'revocado');
 CREATE TYPE tipo_generacion AS ENUM ('automatica', 'manual');
 CREATE TYPE estado_envio AS ENUM ('pendiente', 'enviado', 'fallido');
+CREATE TYPE proposito_token AS ENUM ('verificacion', 'recuperacion');
 
 -- Autenticación y autorización
 CREATE TABLE roles (
@@ -106,11 +107,20 @@ CREATE INDEX sesiones_usuario_idx ON sesiones (usuario_id, expira_en);
 CREATE TABLE tokens_recuperacion (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  -- Verificar un correo y recuperar una contraseña son el mismo mecanismo:
+  -- token con hash, caducidad y un solo uso. Comparten tabla para que las
+  -- reglas que los cuidan se escriban una vez.
+  proposito proposito_token NOT NULL DEFAULT 'recuperacion',
   token_hash TEXT NOT NULL UNIQUE,
   expira_en TIMESTAMPTZ NOT NULL,
   usado_en TIMESTAMPTZ,
   creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Un token vivo por cuenta y propósito: emitir uno nuevo invalida el anterior.
+CREATE UNIQUE INDEX tokens_recuperacion_vigente_idx
+  ON tokens_recuperacion (usuario_id, proposito)
+  WHERE usado_en IS NULL;
 
 -- Procesos, vacantes y personas
 CREATE TABLE convocatorias (
@@ -628,6 +638,29 @@ CREATE TABLE envios_certificado (
 
 CREATE INDEX envios_certificado_idx
   ON envios_certificado (certificado_id, creado_en);
+
+-- Registro de correo transaccional. Una fila por intento de envío: el envío
+-- ocurre dentro de la petición y su fallo no se propaga, así que sin esto no
+-- habría forma de saber que un mensaje no llegó.
+CREATE TABLE envios_correo (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  plantilla VARCHAR(60) NOT NULL,
+  -- El destinatario que el sistema quiso usar. Con EMAIL_REDIRIGIR_A puesto
+  -- el mensaje va a otra parte; aquí se guarda el real.
+  destinatario_email VARCHAR(254) NOT NULL,
+  asunto VARCHAR(255) NOT NULL,
+  entidad VARCHAR(60),
+  entidad_id TEXT,
+  estado estado_envio NOT NULL DEFAULT 'pendiente',
+  numero_intento SMALLINT NOT NULL DEFAULT 1 CHECK (numero_intento > 0),
+  proveedor_id VARCHAR(180),
+  mensaje_error TEXT,
+  enviado_en TIMESTAMPTZ,
+  creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX envios_correo_estado_idx ON envios_correo (estado, creado_en);
+CREATE INDEX envios_correo_entidad_idx ON envios_correo (entidad, entidad_id);
 
 -- Auditoría transversal para operaciones administrativas.
 CREATE TABLE auditoria (
