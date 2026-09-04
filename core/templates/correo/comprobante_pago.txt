@@ -1,0 +1,17 @@
+Hola{% if nombre %} {{ nombre }}{% endif %}:
+
+{% if pruebas %}Ya tienes {{ pruebas }} prueba{{ pruebas|pluralize:"s" }} en tu expediente.{% else %}Tu pago quedó registrado.{% endif %}
+
+COMPROBANTE DE COMPRA
+Folio        {{ folio }}{% if paquete %}
+Paquete      {{ paquete }}{% endif %}{% if importe %}
+Importe      {{ importe }}{% endif %}{% if pagado_en %}
+Pagado el    {{ pagado_en }}{% endif %}{% if vigente_hasta %}
+Vigencia     {{ vigente_hasta }}{% endif %}
+
+Guarda este folio: es la referencia con la que podemos localizar tu compra.
+
+{% if pruebas %}Consulta tus pruebas aquí:
+{{ enlace }}
+{% endif %}
+{% include "correo/_firma.txt" %}
