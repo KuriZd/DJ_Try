@@ -1,0 +1,10 @@
+Esto es un correo de prueba de la plataforma AMIS.
+
+Si lo estás leyendo, la configuración de envío funciona: el servidor se
+conectó al SMTP, autenticó y el mensaje llegó a un buzón real.
+
+Enviado    {{ momento }}
+Canal      {{ host }}:{{ puerto }}
+Remitente  {{ remitente }}
+
+{% include "correo/_firma.txt" %}
