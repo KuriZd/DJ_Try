@@ -424,9 +424,9 @@ class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
     inicial carga también en la base de pruebas, así que aquí sólo se asignan.
 
     Ese mismo seed crea expedientes ASP-001..ASP-005, de ahí el prefijo TEST-
-    en los ids de aquí. Hoy no siembra postulaciones, pero las aserciones de
-    "ve todas" comprueban inclusión y no igualdad, para no romperse si algún
-    día las siembra.
+    en los ids de aquí, y desde 0012_seed_postulaciones también siembra
+    postulaciones. Por eso las aserciones de "ve todas" comprueban inclusión
+    y no igualdad: el conteo se rompe cada vez que crece el seed.
     """
 
     @classmethod
@@ -573,7 +573,8 @@ class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
         )
 
         self.assertEqual(respuesta.status_code, 200)
-        self.assertEqual(len(respuesta.data), 2)
+        self.assertIn(self.postulacion_propia.id, self.ids_de(respuesta))
+        self.assertIn(self.postulacion_ajena.id, self.ids_de(respuesta))
 
     def test_sin_sesion_responde_401(self):
         respuesta = APIClient().get(reverse("api:postulacion-list"))
@@ -1064,6 +1065,26 @@ class ReportePsicometricoTest(TestCase):
         self.assertEqual(len(reporte.escalas), 2)
         self.assertEqual(reporte.escalas[0]["nombre"], "Series numericas")
 
+    def test_conserva_el_nombre_y_la_nota_que_escribe_la_persona(self):
+        respuesta = self.subir(
+            nombre_original="Informe de la convocatoria 2026",
+            notas="Lo aplico un despacho externo.",
+            archivo=self.pdf("descarga (3).pdf"),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        # El nombre del archivo no sirve de titulo en el expediente.
+        self.assertEqual(reporte.nombre_original, "Informe de la convocatoria 2026")
+        self.assertEqual(reporte.notas, "Lo aplico un despacho externo.")
+
+    def test_sin_nombre_propio_se_queda_el_del_archivo(self):
+        respuesta = self.subir(nombre_original="")
+
+        self.assertEqual(respuesta.status_code, 201)
+        reporte = ReportePsicometrico.objects.get(id=respuesta.data["id"])
+        self.assertEqual(reporte.nombre_original, "resultado.pdf")
+
     def test_rechaza_puntaje_fuera_de_rango(self):
         respuesta = self.subir(puntaje=140)
 
@@ -1155,6 +1176,53 @@ class ReportePsicometricoTest(TestCase):
         self.assertEqual(
             {fila["id"] for fila in respuesta.data}, {propio.data["id"]}
         )
+
+    def test_aspirante_retira_el_informe_que_el_archivo(self):
+        creado = self.subir(
+            usuario=self.aspirante_usuario,
+            aspirante=None,
+            referencia_evaluacion_externa=None,
+        )
+        cliente = self.cliente_de(self.aspirante_usuario)
+
+        respuesta = cliente.delete(
+            reverse("api:reporte-psicometrico-detail", args=[creado.data["id"]])
+        )
+
+        self.assertEqual(respuesta.status_code, 204)
+        reporte = ReportePsicometrico.objects.get(id=creado.data["id"])
+        # No se borra la fila: queda constancia de quien lo retiro.
+        self.assertEqual(
+            reporte.estado, EstadoReportePsicometrico.DESHABILITADO
+        )
+        self.assertTrue(reporte.historial.filter(accion="disabled").exists())
+        # Y desaparece de su expediente.
+        listado = cliente.get(reverse("api:reporte-psicometrico-list"))
+        self.assertNotIn(
+            creado.data["id"], {fila["id"] for fila in listado.data}
+        )
+
+    def test_aspirante_no_retira_lo_que_aplico_la_plataforma(self):
+        creado = self.subir()
+
+        respuesta = self.cliente_de(self.aspirante_usuario).delete(
+            reverse("api:reporte-psicometrico-detail", args=[creado.data["id"]])
+        )
+
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(
+            ReportePsicometrico.objects.get(id=creado.data["id"]).estado,
+            EstadoReportePsicometrico.DISPONIBLE,
+        )
+
+    def test_administrador_si_retira_un_informe_de_plataforma(self):
+        creado = self.subir()
+
+        respuesta = self.cliente_de(self.admin).delete(
+            reverse("api:reporte-psicometrico-detail", args=[creado.data["id"]])
+        )
+
+        self.assertEqual(respuesta.status_code, 204)
 
     def test_listado_requiere_autenticacion(self):
         respuesta = APIClient().get(reverse("api:reporte-psicometrico-list"))
