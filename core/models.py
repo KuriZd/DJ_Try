@@ -3,6 +3,45 @@ import uuid
 from django.db import models
 
 
+class Video(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        UPLOADED = 'uploaded', 'Uploaded'
+        FAILED = 'failed', 'Failed'
+
+    class Visibility(models.TextChoices):
+        PRIVATE = 'private', 'Private'
+        UNLISTED = 'unlisted', 'Unlisted'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey('Usuario', models.CASCADE, related_name='videos')
+    duration_seconds = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.PRIVATE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class VideoRendition(models.Model):
+    """El original hoy; perfiles como 720p pueden agregarse sin cambiar Video."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    video = models.ForeignKey(Video, models.CASCADE, related_name='renditions')
+    profile = models.CharField(max_length=32, default='original')
+    s3_key = models.CharField(max_length=512, unique=True, editable=False)
+    file_size = models.PositiveBigIntegerField(null=True, blank=True)
+    content_type = models.CharField(max_length=100, default='video/mp4')
+    status = models.CharField(max_length=16, choices=Video.Status.choices, default=Video.Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['video', 'profile'], name='unique_video_profile')]
+
+
 class EstadoUsuario(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ACTIVO = "activo", "Activo"

@@ -1,5 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import SimpleRouter
+from .video_views import VideoViewSet
 
 from .views import (
     AspiranteViewSet,
@@ -31,6 +32,7 @@ from .views import (
 app_name = "api"
 
 router = SimpleRouter()
+router.register('videos', VideoViewSet, basename='video')
 router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
