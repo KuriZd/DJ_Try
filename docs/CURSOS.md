@@ -8,7 +8,7 @@ Las rutas y los cuerpos de las acciones estan disponibles en `/api/docs/`.
 ```powershell
 python -m pip install -r requirements.txt
 python manage.py migrate
-python manage.py test core.test_cursos core.test_videos --noinput
+python manage.py test tests.test_cursos tests.test_videos --noinput
 ```
 
 La migracion `0025_cursos` crea cinco tablas administradas por Django:
