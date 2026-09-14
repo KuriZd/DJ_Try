@@ -5,6 +5,8 @@ usuarios, aspirantes, perfiles profesionales, postulaciones y certificados.
 
 ## Documentación del proyecto
 
+- [Certificados](docs/CERTIFICADOS.md): emisión, PDF, permisos y contrato para el frontend.
+
 - [Guía completa](docs/GUIA_COMPLETA.md): configuración, autenticación y endpoints.
 - [Video privado en S3](docs/VIDEO_S3.md): modelos, API, permisos y reproductor.
 - [Operación de video](docs/VIDEO_S3_OPERACION.md): backup, migraciones y smoke test.
@@ -256,8 +258,17 @@ token JWT mediante el botón **Authorize** y el formato `Bearer <token>`.
 
 ## Pruebas
 
+Todas las pruebas automatizadas se encuentran en `tests/`, agrupadas por módulo.
+Ejecutar la suite completa desde la raíz del proyecto:
+
 ```powershell
 python manage.py test
+```
+
+Para ejecutar únicamente un módulo:
+
+```powershell
+python manage.py test tests.test_cursos
 ```
 
 ## Documentación
