@@ -140,8 +140,8 @@ $env:POSTGRES_PASSWORD = "..."
 
 .\.venv\Scripts\python.exe manage.py migrate
 .\.venv\Scripts\python.exe manage.py test
-.\.venv\Scripts\python.exe manage.py test core.test_correo_capa
-.\.venv\Scripts\python.exe manage.py test core.test_correo_comprobante
+.\.venv\Scripts\python.exe manage.py test tests.test_correo_capa
+.\.venv\Scripts\python.exe manage.py test tests.test_correo_comprobante
 .\.venv\Scripts\python.exe manage.py check
 .\.venv\Scripts\python.exe manage.py check --deploy
 ```
