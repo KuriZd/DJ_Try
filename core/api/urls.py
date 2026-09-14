@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 from .video_views import VideoViewSet
+from .certificado_views import CertificadoViewSet, TipoCertificadoViewSet, PlantillaCertificadoViewSet
 from .curso_views import CursoViewSet, LeccionViewSet, InscripcionViewSet, ProgresoLeccionViewSet, CertificadoCursoViewSet
 
 from .views import (
@@ -33,6 +34,9 @@ from .views import (
 app_name = "api"
 
 router = SimpleRouter()
+router.register('certificados', CertificadoViewSet, basename='certificado')
+router.register('tipos-certificado', TipoCertificadoViewSet, basename='tipo-certificado')
+router.register('plantillas-certificado', PlantillaCertificadoViewSet, basename='plantilla-certificado')
 router.register('cursos', CursoViewSet, basename='curso')
 router.register('lecciones', LeccionViewSet, basename='leccion')
 router.register('inscripciones', InscripcionViewSet, basename='inscripcion')
