@@ -122,6 +122,11 @@ def api_root(request):
             "ordenes_paypal": reverse("api:ordenes-paypal", request=request),
             "webhook_paypal": reverse("api:webhook-paypal", request=request),
             "vacantes": reverse("api:vacante-list", request=request),
+            "cursos": reverse("api:curso-list", request=request),
+            "lecciones": reverse("api:leccion-list", request=request),
+            "inscripciones": reverse("api:inscripcion-list", request=request),
+            "progresos_lecciones": reverse("api:progreso-leccion-list", request=request),
+            "certificados_cursos": reverse("api:certificado-curso-list", request=request),
         }
     )
 
