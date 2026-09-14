@@ -10,3 +10,4 @@ argon2-cffi
 bcrypt
 django-storages[s3]>=1.14.4,<2
 boto3>=1.36,<2
+reportlab>=4.4,<5
