@@ -3,7 +3,27 @@
 Backend REST desarrollado con Django y Django REST Framework para gestionar
 usuarios, aspirantes, perfiles profesionales, postulaciones y certificados.
 
-## Requisitos
+## Documentación del proyecto
+
+- [Guía completa](docs/GUIA_COMPLETA.md): configuración, autenticación y endpoints.
+- [Video privado en S3](docs/VIDEO_S3.md): modelos, API, permisos y reproductor.
+- [Operación de video](docs/VIDEO_S3_OPERACION.md): backup, migraciones y smoke test.
+- [Correo transaccional](docs/CORREO.md): configuración, envíos y reintentos.
+
+### Estado del video — 10 de septiembre de 2026
+
+Implementados PUT directo a S3 (firma de 10 minutos), confirmación con
+`head_object` y reproducción GET firmada (1 hora). La base local ya tiene
+`0023_videos_s3` y `0024_enviocorreo_state` aplicadas; las tablas de video
+pasaron la verificación de columnas y restricciones. La segunda migración
+registra el modelo de correo en el historial de Django sin modificar sus datos.
+
+El 11 de septiembre se completó el smoke test contra S3 en us-east-2:
+subida, confirmación, CORS y GET 206 correctos. Se fijó el endpoint regional
+para evitar redirecciones 307 del host global. Pendiente: reproducción y seek
+en el navegador real. Detalles en [la guía operativa](docs/VIDEO_S3_OPERACION.md).
+
+## Requisitos de instalación
 
 - Python 3.12+
 - PostgreSQL 15+
@@ -70,9 +90,17 @@ $env:POSTGRES_PORT="5432"
 
 ### 5. Aplicar las migraciones
 
+También puedes definir la configuración local en `.env`, tomando `.env.example`
+como referencia sin sobrescribir un archivo existente. Settings carga primero
+`.env.paypal` y después `.env`, sin reemplazar variables ya definidas en el
+proceso. Configura una `DJANGO_SECRET_KEY` estable y las credenciales PostgreSQL.
+
 ```powershell
 python manage.py migrate
 python manage.py check
+python manage.py verificar_video_schema
+python manage.py makemigrations --check --dry-run
+python manage.py migrate --check
 ```
 
 ### 6. Ejecutar el servidor
