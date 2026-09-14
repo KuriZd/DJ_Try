@@ -1,4 +1,13 @@
-# Pendientes de datos y certificados
+# Datos y certificados
+
+El trabajo listado abajo está implementado en `0028_certificados_api` y en el
+módulo de certificados. Contrato: [CERTIFICADOS.md](docs/CERTIFICADOS.md).
+Se conserva `aspirantes.folio_aplicacion` por compatibilidad. La emisión de
+reclutamiento es manual y exige justificación; la automática requiere definir
+reglas de aprobación. Falta integrar y comprobar la pantalla del frontend y
+revisar los textos institucionales con su responsable.
+
+## Alcance implementado
 
 ## Folio por postulación
 
