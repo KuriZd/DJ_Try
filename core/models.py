@@ -3,6 +3,124 @@ import uuid
 from django.db import models
 
 
+def nuevo_folio_postulacion():
+    return 'POST-' + uuid.uuid4().hex
+
+
+class Curso(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    titulo = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True)
+    imagen = models.URLField(max_length=1000, blank=True)
+    instructor = models.ForeignKey('Usuario', models.PROTECT, related_name='cursos_impartidos')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=False)
+    duracion_estimada = models.PositiveIntegerField(default=0, help_text='Duracion en segundos.')
+    categoria = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ['-fecha_creacion', 'id']
+
+
+class Leccion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    curso = models.ForeignKey(Curso, models.CASCADE, related_name='lecciones')
+    titulo = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True)
+    video = models.ForeignKey('Video', models.PROTECT, related_name='lecciones')
+    orden = models.PositiveIntegerField()
+    duracion = models.PositiveIntegerField(default=0, help_text='Duracion en segundos.')
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['orden', 'id']
+        constraints = [models.UniqueConstraint(fields=['curso', 'orden'], name='curso_orden_unico')]
+
+
+class Inscripcion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    usuario = models.ForeignKey('Usuario', models.CASCADE, related_name='inscripciones_cursos')
+    curso = models.ForeignKey(Curso, models.CASCADE, related_name='inscripciones')
+    fecha_inscripcion = models.DateTimeField(auto_now_add=True)
+    completado = models.BooleanField(default=False, editable=False)
+    porcentaje_avance = models.DecimalField(max_digits=5, decimal_places=2, default=0, editable=False)
+
+    class Meta:
+        ordering = ['-fecha_inscripcion', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['usuario', 'curso'], name='usuario_curso_unico'),
+            models.CheckConstraint(condition=models.Q(porcentaje_avance__gte=0, porcentaje_avance__lte=100), name='avance_entre_0_y_100'),
+        ]
+
+
+class ProgresoLeccion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    usuario = models.ForeignKey('Usuario', models.CASCADE, related_name='progresos_lecciones')
+    leccion = models.ForeignKey(Leccion, models.CASCADE, related_name='progresos')
+    visto = models.BooleanField(default=False)
+    fecha_completado = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['id']
+        constraints = [models.UniqueConstraint(fields=['usuario', 'leccion'], name='usuario_leccion_unico')]
+
+
+class CertificadoCurso(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    usuario = models.ForeignKey('Usuario', models.CASCADE, related_name='certificados_cursos')
+    curso = models.ForeignKey(Curso, models.CASCADE, related_name='certificados')
+    codigo_certificado = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    fecha_emision = models.DateTimeField(auto_now_add=True)
+    # PDF pequeno y privado: se persiste en la misma transaccion que el progreso.
+    archivo_pdf = models.BinaryField(editable=False)
+
+    class Meta:
+        ordering = ['-fecha_emision', 'id']
+        constraints = [models.UniqueConstraint(fields=['usuario', 'curso'], name='certificado_usuario_curso_unico')]
+
+
+class Video(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        UPLOADED = 'uploaded', 'Uploaded'
+        FAILED = 'failed', 'Failed'
+
+    class Visibility(models.TextChoices):
+        PRIVATE = 'private', 'Private'
+        UNLISTED = 'unlisted', 'Unlisted'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey('Usuario', models.CASCADE, related_name='videos')
+    titulo = models.CharField(max_length=200, blank=True, default='')
+    descripcion = models.TextField(blank=True, default='')
+    eliminado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    duration_seconds = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.PRIVATE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class VideoRendition(models.Model):
+    """El original hoy; perfiles como 720p pueden agregarse sin cambiar Video."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    video = models.ForeignKey(Video, models.CASCADE, related_name='renditions')
+    profile = models.CharField(max_length=32, default='original')
+    s3_key = models.CharField(max_length=512, unique=True, editable=False)
+    file_size = models.PositiveBigIntegerField(null=True, blank=True)
+    content_type = models.CharField(max_length=100, default='video/mp4')
+    status = models.CharField(max_length=16, choices=Video.Status.choices, default=Video.Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['video', 'profile'], name='unique_video_profile')]
+
+
 class EstadoUsuario(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ACTIVO = "activo", "Activo"
@@ -503,6 +621,7 @@ class AspiranteRequisito(TablaExistente):
 
 class Postulacion(TablaExistente):
     id = models.BigAutoField(primary_key=True)
+    folio = models.CharField(max_length=40, unique=True, default=nuevo_folio_postulacion, editable=False)
     aspirante = models.ForeignKey(
         Aspirante,
         models.PROTECT,
@@ -960,6 +1079,10 @@ class Certificado(TablaExistente):
         related_name="certificados",
     )
     aspirante_snapshot = models.JSONField()
+    archivo_pdf = models.BinaryField(null=True, editable=False)
+    postulacion = models.ForeignKey(
+        Postulacion, models.PROTECT, null=True, blank=True, related_name='certificados',
+    )
     tipo = models.ForeignKey(
         TipoCertificado,
         models.PROTECT,

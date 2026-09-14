@@ -79,6 +79,7 @@ class ApiRoutesTest(SimpleTestCase):
             "api:vacante-list",
             "api:vacante-admin-list",
             "api:reporte-psicometrico-list",
+            "api:certificado-list",
         )
 
         for nombre in nombres:
@@ -88,7 +89,6 @@ class ApiRoutesTest(SimpleTestCase):
     def test_rutas_retiradas(self):
         for ruta in (
             "/api/convocatorias/",
-            "/api/certificados/",
         ):
             with self.subTest(ruta=ruta):
                 with self.assertRaises(Resolver404):

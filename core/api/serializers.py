@@ -117,6 +117,7 @@ class AspiranteResumenSerializer(serializers.ModelSerializer):
 
 
 class PostulacionSerializer(serializers.ModelSerializer):
+    folio = serializers.CharField(read_only=True)
     aspirante = AspiranteResumenSerializer(read_only=True)
     vacante_titulo = serializers.CharField(source="vacante.titulo", read_only=True)
 
@@ -124,6 +125,7 @@ class PostulacionSerializer(serializers.ModelSerializer):
         model = Postulacion
         fields = (
             "id",
+            "folio",
             "aspirante",
             "vacante",
             "vacante_titulo",

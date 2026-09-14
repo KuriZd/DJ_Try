@@ -26,6 +26,9 @@ DATABASE_SQL_DIR = BASE_DIR / 'database'
 # Configuración local de PayPal. Las variables definidas por el sistema tienen
 # prioridad y el archivo permanece fuera de Git mediante `.env.*`.
 load_dotenv(BASE_DIR / '.env.paypal', override=False)
+# Configuracion local general (BD, clave Django y S3). El entorno del proceso
+# y la configuracion PayPal anterior conservan prioridad.
+load_dotenv(BASE_DIR / '.env', override=False)
 
 
 # Quick-start development settings - unsuitable for production
@@ -164,6 +167,34 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Alias separado: los reportes privados existentes conservan su storage local.
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
+AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+VIDEO_UPLOAD_URL_TTL = 600
+VIDEO_PLAYBACK_URL_TTL = 3600
+VIDEO_MAX_BYTES = int(os.getenv('VIDEO_MAX_BYTES', str(1024 * 1024 * 1024)))
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    'videos': {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': AWS_STORAGE_BUCKET_NAME,
+            'region_name': AWS_S3_REGION_NAME,
+            # Evita URLs firmadas al host global y redirects 307 en buckets nuevos.
+            'endpoint_url': f'https://s3.{AWS_S3_REGION_NAME}.amazonaws.com',
+            'addressing_style': 'virtual',
+            'signature_version': AWS_S3_SIGNATURE_VERSION,
+            'default_acl': None,
+            'querystring_auth': True,
+            'querystring_expire': VIDEO_PLAYBACK_URL_TTL,
+            'custom_domain': None,
+            'file_overwrite': False,
+        },
+    },
+}
 
 # Los reportes psicometricos son documentos privados. MEDIA_ROOT se usa como
 # almacenamiento local durante esta etapa, pero no se publica mediante urls.py.

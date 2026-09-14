@@ -127,13 +127,21 @@ entregado. Mira siempre las dos columnas juntas.
 
 ## 4. Base de datos y pruebas
 
+`0022_correo_transaccional` crea la tabla `envios_correo` mediante SQL.
+`0024_enviocorreo_state` registra el modelo `EnvioCorreo` en el historial de
+Django con `managed=False`; no modifica la tabla ni sus datos. Esta migración
+resuelve el aviso de modelos con cambios aún no reflejados en migraciones.
+
+La configuración local se carga de `.env.paypal` y después de `.env`, conservando
+la prioridad de las variables del proceso y de los valores cargados previamente.
+
 ```powershell
 $env:POSTGRES_PASSWORD = "..."
 
 .\.venv\Scripts\python.exe manage.py migrate
 .\.venv\Scripts\python.exe manage.py test
-.\.venv\Scripts\python.exe manage.py test core.test_correo_capa
-.\.venv\Scripts\python.exe manage.py test core.test_correo_comprobante
+.\.venv\Scripts\python.exe manage.py test tests.test_correo_capa
+.\.venv\Scripts\python.exe manage.py test tests.test_correo_comprobante
 .\.venv\Scripts\python.exe manage.py check
 .\.venv\Scripts\python.exe manage.py check --deploy
 ```

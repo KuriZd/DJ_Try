@@ -11,6 +11,7 @@ uso de la API y la estructura funcional del proyecto.
 - PostgreSQL 15+
 - JWT con Simple JWT
 - Psycopg 3
+- django-storages y boto3 para video MP4 privado en S3
 
 ## Estructura
 
@@ -48,13 +49,19 @@ de PowerShell.
 
 ## Base de datos y migraciones
 
+La configuración local se carga desde `.env.paypal` y luego `.env`, sin
+sobrescribir variables del proceso ni valores cargados previamente. Esto incluye
+`DJANGO_SECRET_KEY`, PostgreSQL y S3. Instalar `requirements.txt` en el mismo
+entorno virtual desde el que se ejecuta Django; incluye boto3 y botocore.
+
 La migración inicial ejecuta dentro de una transacción:
 
 1. `database/schema.sql`
 2. `database/seed.sql`
 
-Los modelos utilizan `managed = False` porque las tablas son administradas por
-el esquema SQL. Cada vez que se descarguen migraciones nuevas debe ejecutarse:
+Los modelos del esquema SQL utilizan `managed = False`. `Video` y
+`VideoRendition` son modelos administrados por Django y sus tablas se crean
+mediante migraciones. Cada vez que se descarguen migraciones nuevas debe ejecutarse:
 
 ```powershell
 python manage.py migrate
@@ -63,7 +70,55 @@ python manage.py migrate
 La migración `0007_fecha_nacimiento_aspirante` agrega el campo opcional
 `fecha_nacimiento` a instalaciones existentes.
 
-## Autenticación
+## Video autoalojado en S3
+
+El backend genera firmas; el archivo se sube y descarga directamente desde S3.
+`Video` guarda propietario, visibilidad y estado. `VideoRendition` almacena el
+original y permite agregar perfiles futuros sin cambiar el esquema del video.
+No hay transcoding, HLS ni extracción de duración en este MVP.
+
+| Método y ruta | Acceso y resultado |
+|---|---|
+| `POST /api/videos/upload/` | JWT; recibe filename, content_type y visibility; devuelve PUT firmado por 600 segundos y encabezados obligatorios. |
+| `POST /api/videos/{id}/confirm/` | Propietario; valida tamaño/tipo con HeadObject y confirma uploaded. |
+| `GET /api/videos/` | JWT; lista únicamente los videos propios. |
+| `GET /api/videos/{id}/` | Propietario o quien conozca el UUID de un video unlisted. |
+| `GET /api/videos/{id}/playback/` | Mismos permisos; exige uploaded y devuelve GET firmado por 3600 segundos. |
+
+Los videos privados ajenos devuelven 404. No se exponen keys crudas en metadata.
+Las firmas incluyen necesariamente la ubicación del objeto. El PUT requiere
+`Content-Type: video/mp4` e `If-None-Match: *` para impedir sobrescrituras.
+
+Estado local verificado el 10 de septiembre de 2026:
+
+- `0023_videos_s3` aplicada: tablas y restricciones de video verificadas.
+- `0024_enviocorreo_state` aplicada: registra EnvioCorreo, creado por SQL en
+  0022, sin cambios de tablas o datos. Resuelve el aviso de modelos sin migración.
+- 10 pruebas de API/esquema y 3 pruebas del smoke test aprobadas durante la
+  implementación; no representan una ejecución contra AWS real.
+- Actualización del 11 de septiembre: smoke test real contra S3 aprobado
+  (PUT, confirmación, CORS y GET 206). Endpoint regional explícito para evitar
+  HTTP 307. Pendiente: reproducción y seek en navegador.
+
+```powershell
+python manage.py verificar_video_schema
+python manage.py makemigrations --check --dry-run
+python manage.py migrate --check
+python manage.py test tests.test_videos
+python -m unittest tests.test_smoke_video_s3
+```
+
+`migrate --check` detecta migraciones sin aplicar; `makemigrations --check
+--dry-run` detecta diferencias entre modelos e historial. Usar ambos.
+Si falta botocore, ejecutar `python -m pip install -r requirements.txt` dentro
+del entorno virtual activo.
+
+Consultar [la guía de video](VIDEO_S3.md) para IAM, CORS, variables y ejemplo
+con `<video>`, y [la guía operativa](VIDEO_S3_OPERACION.md) para backup y smoke
+test. Este último exige GET 206 y Content-Range correcto; no usar `curl -I`
+porque enviaría HEAD con una firma creada para GET.
+
+## Autenticación de usuarios
 
 ### Iniciar sesión
 
