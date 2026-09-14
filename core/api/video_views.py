@@ -6,6 +6,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException
@@ -16,6 +18,7 @@ from rest_framework.response import Response
 from core.models import Video, VideoRendition
 from core.services import videos
 from .video_serializers import VideoSerializer, VideoUploadSerializer
+from .curso_permissions import administra_cursos, permisos_cursos
 
 
 class VideoStorageUnavailable(APIException):
@@ -23,19 +26,29 @@ class VideoStorageUnavailable(APIException):
     default_detail = 'Almacenamiento de video no disponible. Intenta de nuevo.'
 
 
-class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                   mixins.UpdateModelMixin, viewsets.GenericViewSet):
     serializer_class = VideoSerializer
     parser_classes = [JSONParser]
     permission_classes = [IsAuthenticated]
     lookup_value_regex = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 
     def get_queryset(self):
-        queryset = Video.objects.prefetch_related('renditions')
+        queryset = Video.objects.filter(eliminado_en__isnull=True).prefetch_related('renditions')
         if getattr(self, 'swagger_fake_view', False):
             return queryset.none()
         owner = Q(owner=self.request.user) if self.request.user.is_authenticated else Q(pk__in=[])
         if self.action in ('retrieve', 'playback'):
-            return queryset.filter(owner | Q(visibility=Video.Visibility.UNLISTED))
+            # Un video vinculado a un curso nunca es publico, aun si era unlisted.
+            acceso = owner | Q(visibility=Video.Visibility.UNLISTED, lecciones__isnull=True)
+            if self.request.user.is_authenticated:
+                acceso |= Q(lecciones__activo=True, lecciones__curso__activo=True,
+                            lecciones__curso__inscripciones__usuario=self.request.user)
+                if administra_cursos(self.request):
+                    acceso |= Q(lecciones__isnull=False)
+                elif 'cursos:crear' in permisos_cursos(self.request):
+                    acceso |= Q(lecciones__curso__instructor=self.request.user)
+            return queryset.filter(acceso).distinct()
         return queryset.filter(owner)
 
     def get_permissions(self):
@@ -48,13 +61,36 @@ class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         response['Cache-Control'] = 'private, no-store'
         return response
 
+    @swagger_auto_schema(request_body=VideoUploadSerializer)
+    def create(self, request, *args, **kwargs):
+        return self.upload(request)
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        get_object_or_404(Video.objects.select_for_update(), pk=kwargs['pk'],
+                          owner=request.user, eliminado_en__isnull=True)
+        return super().update(request, *args, **kwargs)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        video = get_object_or_404(Video.objects.select_for_update(), pk=kwargs['pk'],
+                                 owner=request.user, eliminado_en__isnull=True)
+        if video.lecciones.exists():
+            return Response({'detail': 'El video esta vinculado a lecciones. Reemplazalo o desvinculalo antes de eliminarlo.'}, status=409)
+        video.eliminado_en = timezone.now()
+        video.save(update_fields=['eliminado_en', 'updated_at'])
+        return Response(status=204)
+
+    @swagger_auto_schema(request_body=VideoUploadSerializer)
     @action(detail=False, methods=['post'], url_path='upload')
     def upload(self, request):
         serializer = VideoUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             with transaction.atomic():
-                video = Video.objects.create(owner=request.user, visibility=serializer.validated_data['visibility'])
+                video = Video.objects.create(owner=request.user, visibility=serializer.validated_data['visibility'],
+                                             titulo=serializer.validated_data['titulo'],
+                                             descripcion=serializer.validated_data['descripcion'])
                 key = f'videos/{video.id}/{uuid.uuid4()}.mp4'
                 VideoRendition.objects.create(video=video, s3_key=key)
                 url, headers = videos.upload_url(key)
@@ -66,7 +102,8 @@ class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
     @action(detail=True, methods=['post'], url_path='confirm')
     def confirm(self, request, pk=None):
         with transaction.atomic():
-            video = get_object_or_404(Video.objects.select_for_update(), pk=pk, owner=request.user)
+            video = get_object_or_404(Video.objects.select_for_update(), pk=pk, owner=request.user,
+                                     eliminado_en__isnull=True)
             if video.status == Video.Status.UPLOADED:
                 return Response(VideoSerializer(video).data)
             if video.status == Video.Status.FAILED:
