@@ -104,8 +104,8 @@ Estado local verificado el 10 de septiembre de 2026:
 python manage.py verificar_video_schema
 python manage.py makemigrations --check --dry-run
 python manage.py migrate --check
-python manage.py test core.test_videos
-python -m unittest scripts.test_smoke_video_s3
+python manage.py test tests.test_videos
+python -m unittest tests.test_smoke_video_s3
 ```
 
 `migrate --check` detecta migraciones sin aplicar; `makemigrations --check
