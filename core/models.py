@@ -3,6 +3,10 @@ import uuid
 from django.db import models
 
 
+def nuevo_folio_postulacion():
+    return 'POST-' + uuid.uuid4().hex
+
+
 class Curso(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     titulo = models.CharField(max_length=200)
@@ -617,6 +621,7 @@ class AspiranteRequisito(TablaExistente):
 
 class Postulacion(TablaExistente):
     id = models.BigAutoField(primary_key=True)
+    folio = models.CharField(max_length=40, unique=True, default=nuevo_folio_postulacion, editable=False)
     aspirante = models.ForeignKey(
         Aspirante,
         models.PROTECT,
@@ -1074,6 +1079,10 @@ class Certificado(TablaExistente):
         related_name="certificados",
     )
     aspirante_snapshot = models.JSONField()
+    archivo_pdf = models.BinaryField(null=True, editable=False)
+    postulacion = models.ForeignKey(
+        Postulacion, models.PROTECT, null=True, blank=True, related_name='certificados',
+    )
     tipo = models.ForeignKey(
         TipoCertificado,
         models.PROTECT,
