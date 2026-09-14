@@ -127,6 +127,9 @@ def api_root(request):
             "inscripciones": reverse("api:inscripcion-list", request=request),
             "progresos_lecciones": reverse("api:progreso-leccion-list", request=request),
             "certificados_cursos": reverse("api:certificado-curso-list", request=request),
+            "certificados": reverse("api:certificado-list", request=request),
+            "tipos_certificado": reverse("api:tipo-certificado-list", request=request),
+            "plantillas_certificado": reverse("api:plantilla-certificado-list", request=request),
         }
     )
 
