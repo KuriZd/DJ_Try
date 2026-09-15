@@ -212,10 +212,49 @@ class CertificadosAPITests(TestCase):
         self.client.force_authenticate(self.alumno)
         self.assertEqual(self.client.patch(url, {'activa': True}, format='json').status_code, 403)
 
+    def test_verificacion_publica_por_codigo_y_por_folio(self):
+        data = self.emitir()
+        certificado = Certificado.objects.get(pk=data['id'])
+        publico = APIClient()
+
+        for clave in (certificado.codigo_verificacion, certificado.folio.lower()):
+            response = publico.get('/api/certificados/verificar/' + clave + '/')
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(response.data['folio'], certificado.folio)
+            self.assertTrue(response.data['vigente'])
+            self.assertEqual(response.data['titular'], 'María <Prueba> & López')
+            self.assertEqual(response.data['tipo_nombre'], 'Participación')
+            self.assertEqual(response['Cache-Control'], 'private, no-store')
+            # Quien verifica es un tercero con un papel en la mano, no alguien
+            # con acceso al padrón: nada del expediente ni de lo interno.
+            for campo in ('aspirante_snapshot', 'aspirante', 'observaciones_internas',
+                          'justificacion_manual', 'archivo_pdf', 'postulacion'):
+                self.assertNotIn(campo, response.data)
+
+        self.assertEqual(publico.get('/api/certificados/verificar/NO-EXISTE/').status_code, 404)
+
+    def test_verificacion_publica_delata_el_certificado_retirado(self):
+        data = self.emitir()
+        codigo = Certificado.objects.get(pk=data['id']).codigo_verificacion
+        url = '/api/certificados/' + data['id'] + '/revocar/'
+        self.assertEqual(
+            self.client.post(url, {'motivo': 'Evidencia insuficiente'}, format='json').status_code, 200,
+        )
+
+        # Darlo por inexistente dejaría pasar por bueno un documento retirado.
+        response = APIClient().get('/api/certificados/verificar/' + codigo + '/')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['estado'], 'revocado')
+        self.assertFalse(response.data['vigente'])
+        self.assertIsNotNone(response.data['revocado_en'])
+        # El motivo es asunto de la institución y del titular, no del público.
+        self.assertNotIn('motivo_revocacion', response.data)
+
     def test_schema_incluye_certificados(self):
         response = self.client.get('/api/schema.json')
         self.assertEqual(response.status_code, 200)
         self.assertIn('/api/certificados/', response.data['paths'])
+        self.assertIn('/api/certificados/verificar/{codigo}/', response.data['paths'])
 
 
 class CertificadosConcurrenciaTests(TransactionTestCase):
