@@ -60,5 +60,11 @@ class RestablecerRateThrottle(IpRateThrottle):
     scope = "restablecer"
 
 
+class VerificarCertificadoRateThrottle(IpRateThrottle):
+    """Frena el sondeo de codigos de verificacion desde una misma IP."""
+
+    scope = "verificar_certificado"
+
+
 class PaypalWebhookRateThrottle(IpRateThrottle):
     scope = "paypal_webhook"
