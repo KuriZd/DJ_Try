@@ -1,7 +1,12 @@
 from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 from .video_views import VideoViewSet
-from .certificado_views import CertificadoViewSet, TipoCertificadoViewSet, PlantillaCertificadoViewSet
+from .certificado_views import (
+    CertificadoViewSet,
+    PlantillaCertificadoViewSet,
+    TipoCertificadoViewSet,
+    verificar_certificado,
+)
 from .curso_views import CursoViewSet, LeccionViewSet, InscripcionViewSet, ProgresoLeccionViewSet, CertificadoCursoViewSet
 
 from .views import (
@@ -98,5 +103,12 @@ urlpatterns = [
         name="orden-paypal",
     ),
     path("pagos/paypal/webhook/", webhook_paypal, name="webhook-paypal"),
+    # Antes del router: si no, 'verificar' entraria como el id de un
+    # certificado y la consulta publica pediria sesion.
+    path(
+        "certificados/verificar/<str:codigo>/",
+        verificar_certificado,
+        name="certificado-verificar",
+    ),
     path("", include(router.urls)),
 ]
