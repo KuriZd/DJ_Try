@@ -6,10 +6,10 @@ from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import mixins, viewsets
-from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 
 from core.models import Certificado, EstadoCertificado, PlantillaCertificado, TipoCertificado
@@ -19,8 +19,10 @@ from .certificado_serializers import (
     CertificadoSerializer, EmitirCertificadoSerializer, EnvioCertificadoSerializer,
     HistorialCertificadoSerializer, MotivoCertificadoSerializer,
     PlantillaCertificadoSerializer, TipoCertificadoSerializer,
+    VerificacionCertificadoSerializer,
 )
 from .serializers import permisos_de
+from .throttles import VerificarCertificadoRateThrottle
 
 
 def permisos(request):
@@ -180,6 +182,41 @@ class CertificadoViewSet(RespuestaPrivada, mixins.CreateModelMixin, viewsets.Rea
     @action(detail=True, methods=['get'])
     def envios(self, request, pk=None):
         return Response(EnvioCertificadoSerializer(self.get_object().envios.order_by('-creado_en', 'id'), many=True).data)
+
+
+@swagger_auto_schema(
+    method='get',
+    responses={
+        200: VerificacionCertificadoSerializer,
+        404: 'No existe un certificado con ese folio o codigo.',
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@throttle_classes([VerificarCertificadoRateThrottle])
+def verificar_certificado(request, codigo):
+    """Verificacion publica. Es a donde apunta el QR impreso en el documento.
+
+    El unico endpoint del modulo sin sesion, y tiene que serlo: quien recibe
+    un certificado —otra institucion, una empresa— no tiene cuenta aqui y aun
+    asi necesita comprobar que el documento es autentico.
+
+    Un certificado cancelado o revocado se responde igual, con su estado, en
+    vez de darlo por inexistente: callarlo dejaria pasar por bueno un
+    documento retirado, que es justo lo que esta pagina debe impedir.
+
+    Se acepta el folio ademas del codigo porque es lo que se lee a simple
+    vista en el papel cuando el QR no se puede escanear.
+    """
+    clave = (codigo or '').strip()[:64]
+    certificado = Certificado.objects.defer('archivo_pdf').select_related('tipo').filter(
+        Q(codigo_verificacion__iexact=clave) | Q(folio__iexact=clave),
+    ).first()
+    if not certificado:
+        raise NotFound('No existe un certificado con ese folio o codigo.')
+    respuesta = Response(VerificacionCertificadoSerializer(certificado).data)
+    respuesta['Cache-Control'] = 'private, no-store'
+    return respuesta
 
 
 class PermisoCatalogoCertificado(BasePermission):
