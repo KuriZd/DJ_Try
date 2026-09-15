@@ -22,6 +22,9 @@ from .correo import _asunto_final, _destinatario_real
 
 
 VIGENTES = ('en_proceso', 'emitido', 'enviado', 'reenviado')
+# Los que ya son un documento: hay PDF, se puede enviar y la verificacion
+# publica los da por buenos. 'en_proceso' todavia no lo es.
+EMITIDOS = ('emitido', 'enviado', 'reenviado')
 
 
 class ConflictoCertificado(APIException):
