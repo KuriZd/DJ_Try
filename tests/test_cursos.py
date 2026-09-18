@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
 from core.models import (
-    Curso, Leccion, Inscripcion, ProgresoLeccion, CertificadoCurso,
+    Curso, Modulo, Leccion, Inscripcion, ProgresoLeccion, CertificadoCurso,
     Rol, Usuario, UsuarioRol, Video, VideoRendition,
 )
 
@@ -35,13 +35,14 @@ class CursosAPITests(TestCase):
         cls.curso = Curso.objects.create(titulo='Introducción & práctica', instructor=cls.instructor, activo=True)
         cls.video = Video.objects.create(owner=cls.instructor, status='uploaded', visibility='unlisted')
         VideoRendition.objects.create(video=cls.video, s3_key=f'videos/{cls.video.id}.mp4', status='uploaded')
-        cls.leccion = Leccion.objects.create(curso=cls.curso, video=cls.video, titulo='Inicio', orden=1)
-        cls.segunda = Leccion.objects.create(curso=cls.curso, video=cls.video, titulo='Final', orden=2)
+        cls.modulo = Modulo.objects.create(curso=cls.curso, titulo='Contenido', orden=1)
+        cls.leccion = Leccion.objects.create(modulo=cls.modulo, video=cls.video, titulo='Inicio', orden=1)
+        cls.segunda = Leccion.objects.create(modulo=cls.modulo, video=cls.video, titulo='Final', orden=2)
 
     def setUp(self):
         self.client = APIClient()
         self.client.force_authenticate(self.alumno)
-        self.curso_url = f'/api/cursos/{self.curso.pk}/'
+        self.curso_url = f'/api/cursos/{self.curso.slug}/'
         self.leccion_url = f'/api/lecciones/{self.leccion.pk}/'
 
     def inscribir(self):
@@ -55,24 +56,113 @@ class CursosAPITests(TestCase):
 
     def test_autenticacion_jwt_y_anonimos(self):
         self.client.force_authenticate(None)
-        for url in ('/api/cursos/', '/api/lecciones/', '/api/inscripciones/', '/api/progresos-lecciones/', '/api/certificados-cursos/'):
+        for url in ('/api/modulos/', '/api/lecciones/', '/api/inscripciones/', '/api/progresos-lecciones/', '/api/certificados-cursos/'):
             self.assertEqual(self.client.get(url).status_code, 401)
+        # El catalogo y la ficha son publicos; inscribirse no.
+        self.assertEqual(self.client.get('/api/cursos/').status_code, 200)
+        self.assertEqual(self.client.get(self.curso_url).status_code, 200)
+        self.assertEqual(self.client.post(self.curso_url + 'inscribir/').status_code, 401)
         token = AccessToken.for_user(self.alumno)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
-        self.assertEqual(self.client.get('/api/cursos/').status_code, 200)
+        self.assertEqual(self.client.get('/api/inscripciones/').status_code, 200)
         self.alumno.estado = 'bloqueado'
         self.alumno.save(update_fields=['estado'])
-        self.assertEqual(self.client.get('/api/cursos/').status_code, 401)
+        self.assertEqual(self.client.get('/api/inscripciones/').status_code, 401)
 
     def test_catalogo_sin_acceso_al_contenido(self):
         borrador = Curso.objects.create(titulo='Borrador', instructor=self.instructor)
         response = self.client.get('/api/cursos/')
         self.assertEqual([str(self.curso.pk)], [str(c['id']) for c in response.data])
-        self.assertEqual(self.client.get(self.curso_url).status_code, 404)
-        self.assertEqual(self.client.get(self.curso_url + 'lecciones/').status_code, 404)
+        # La ficha ensena el temario sin inscripcion: dice que hay dentro y lo
+        # marca bajo llave. Lo que no entrega es el contenido de la leccion.
+        ficha = self.client.get(self.curso_url)
+        self.assertEqual(ficha.status_code, 200)
+        self.assertEqual([m['titulo'] for m in ficha.data['modulos']], ['Contenido'])
+        self.assertEqual(len(ficha.data['modulos'][0]['lecciones']), 2)
+        self.assertEqual(self.client.get(self.curso_url + 'lecciones/').status_code, 403)
         self.assertEqual(self.client.get(self.leccion_url).status_code, 404)
-        self.assertEqual(self.client.get(f'/api/cursos/{borrador.pk}/').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/cursos/{borrador.slug}/').status_code, 404)
         self.assertEqual(self.completar().status_code, 404)
+
+    def test_ficha_publica_omite_lecciones_desactivadas(self):
+        self.segunda.activo = False
+        self.segunda.save(update_fields=['activo'])
+        self.client.force_authenticate(None)
+        ficha = self.client.get(self.curso_url)
+        self.assertEqual([l['titulo'] for l in ficha.data['modulos'][0]['lecciones']], ['Inicio'])
+        self.assertEqual(ficha.data['total_lecciones'], 1)
+        self.client.force_authenticate(self.instructor)
+        ficha = self.client.get(self.curso_url)
+        self.assertEqual(len(ficha.data['modulos'][0]['lecciones']), 2)
+
+    def test_slug_unico_y_estable(self):
+        self.client.force_authenticate(self.instructor)
+        primero = self.client.post('/api/cursos/', {'titulo': 'Marco normativo'}, format='json')
+        segundo = self.client.post('/api/cursos/', {'titulo': 'Marco normativo'}, format='json')
+        self.assertEqual(primero.data['slug'], 'marco-normativo')
+        self.assertEqual(segundo.data['slug'], 'marco-normativo-2')
+        url = f"/api/cursos/{primero.data['slug']}/"
+        renombrado = self.client.patch(url, {'titulo': 'Otro nombre'}, format='json')
+        self.assertEqual(renombrado.data['slug'], 'marco-normativo')
+
+    def test_ficha_con_metadatos_del_catalogo(self):
+        self.client.force_authenticate(self.instructor)
+        response = self.client.patch(self.curso_url, {
+            'resumen': 'Que es un contrato de seguro.',
+            'nivel': 'basico',
+            'categoria': 'normativo',
+            'objetivos': ['  Leer una poliza  ', 'Calcular una prima'],
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['categoria'], {'clave': 'normativo', 'nombre': 'Normativo'})
+        self.assertEqual(response.data['objetivos'], ['Leer una poliza', 'Calcular una prima'])
+        self.assertEqual(response.data['nivel'], 'basico')
+        self.assertEqual(response.data['total_modulos'], 1)
+        self.assertEqual(response.data['total_lecciones'], 2)
+        for invalido in ({'nivel': 'experto'}, {'categoria': 'inventada'}, {'objetivos': ['  ']}):
+            self.assertEqual(self.client.patch(self.curso_url, invalido, format='json').status_code, 400, invalido)
+
+    def test_crud_modulos_y_orden_unico(self):
+        self.client.force_authenticate(self.instructor)
+        data = {'curso': str(self.curso.pk), 'titulo': 'Segundo bloque', 'orden': 2}
+        response = self.client.post('/api/modulos/', data, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        url = f"/api/modulos/{response.data['id']}/"
+        self.assertEqual(self.client.post('/api/modulos/', data, format='json').status_code, 400)
+        self.assertEqual(self.client.patch(url, {'orden': 1}, format='json').status_code, 400)
+        self.assertEqual(self.client.patch(url, {'orden': 3}, format='json').status_code, 200)
+        # Dos modulos del mismo curso pueden tener cada uno su leccion 1.
+        segunda = self.client.post('/api/lecciones/', {
+            'modulo': response.data['id'], 'titulo': 'Arranque', 'video': str(self.video.pk), 'orden': 1,
+        }, format='json')
+        self.assertEqual(segunda.status_code, 201, segunda.data)
+        self.client.force_authenticate(self.otro_instructor)
+        self.assertEqual(self.client.patch(url, {'titulo': 'Ajeno'}, format='json').status_code, 403)
+
+    def test_borrar_modulo_recalcula_el_avance(self):
+        self.inscribir()
+        self.completar()
+        self.client.force_authenticate(self.instructor)
+        otro = self.client.post('/api/modulos/', {
+            'curso': str(self.curso.pk), 'titulo': 'Extra', 'orden': 2,
+        }, format='json')
+        self.assertEqual(otro.status_code, 201, otro.data)
+        suelta = self.client.post('/api/lecciones/', {
+            'modulo': otro.data['id'], 'titulo': 'Suelta', 'video': str(self.video.pk), 'orden': 1,
+        }, format='json')
+        self.assertEqual(suelta.status_code, 201, suelta.data)
+        self.assertEqual(str(Inscripcion.objects.get().porcentaje_avance), '33.33')
+        # Borrar el modulo se lleva su leccion por cascada, y el avance del
+        # alumno vuelve a medirse sobre lo que queda.
+        self.assertEqual(self.client.delete(f"/api/modulos/{otro.data['id']}/").status_code, 204)
+        self.assertEqual(str(Inscripcion.objects.get().porcentaje_avance), '50.00')
+        self.assertFalse(Leccion.objects.filter(titulo='Suelta').exists())
+
+    def test_no_mover_modulo_entre_cursos(self):
+        self.client.force_authenticate(self.instructor)
+        otro = Curso.objects.create(titulo='Otro curso', instructor=self.instructor)
+        response = self.client.patch(f'/api/modulos/{self.modulo.pk}/', {'curso': str(otro.pk)}, format='json')
+        self.assertEqual(response.status_code, 400)
 
     def test_inscripcion_idempotente_y_solo_propia(self):
         response = self.client.post('/api/inscripciones/', {
@@ -85,7 +175,8 @@ class CursosAPITests(TestCase):
         self.assertEqual(self.inscribir().status_code, 200)
         self.assertEqual(Inscripcion.objects.count(), 1)
         self.assertEqual(self.client.get(self.curso_url).status_code, 200)
-        self.assertEqual(len(self.client.get(self.curso_url + 'lecciones/').data), 2)
+        temario = self.client.get(self.curso_url + 'lecciones/').data
+        self.assertEqual([len(modulo['lecciones']) for modulo in temario], [2])
         self.client.force_authenticate(self.otro)
         self.assertEqual(self.client.get('/api/inscripciones/').data, [])
         self.assertEqual(self.client.get(f"/api/inscripciones/{response.data['id']}/").status_code, 404)
@@ -95,9 +186,9 @@ class CursosAPITests(TestCase):
         self.client.force_authenticate(self.instructor)
         response = self.client.post('/api/cursos/', {'titulo': 'Nuevo'}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
-        url = f"/api/cursos/{response.data['id']}/"
+        url = f"/api/cursos/{response.data['slug']}/"
         self.assertFalse(response.data['activo'])
-        self.assertEqual(self.client.patch(url, {'categoria': 'Seguridad'}, format='json').status_code, 200)
+        self.assertEqual(self.client.patch(url, {'categoria': 'tecnico'}, format='json').status_code, 200)
         self.assertEqual(self.client.put(url, {'titulo': 'Reemplazo', 'activo': True}, format='json').status_code, 200)
         self.client.force_authenticate(self.otro_instructor)
         self.assertEqual(self.client.patch(url, {'titulo': 'Ajeno'}, format='json').status_code, 404)
@@ -109,7 +200,7 @@ class CursosAPITests(TestCase):
             self.client.force_authenticate(user)
             response = self.client.post('/api/cursos/', {'titulo': 'Borrador', 'instructor': str(self.instructor.pk)}, format='json')
             self.assertEqual(response.status_code, 201, response.data)
-            self.assertEqual(self.client.get(f"/api/cursos/{response.data['id']}/").status_code, 200)
+            self.assertEqual(self.client.get(f"/api/cursos/{response.data['slug']}/").status_code, 200)
             self.assertIn(str(response.data['id']), [str(c['id']) for c in self.client.get('/api/cursos/').data])
         response = self.client.post('/api/cursos/', {'titulo': 'Error', 'instructor': str(self.alumno.pk)}, format='json')
         self.assertEqual(response.status_code, 400)
@@ -121,7 +212,7 @@ class CursosAPITests(TestCase):
 
     def test_crud_lecciones_y_orden_unico(self):
         self.client.force_authenticate(self.instructor)
-        data = {'curso': str(self.curso.pk), 'titulo': 'Extra', 'video': str(self.video.pk), 'orden': 3}
+        data = {'modulo': str(self.modulo.pk), 'titulo': 'Extra', 'video': str(self.video.pk), 'orden': 3}
         response = self.client.post('/api/lecciones/', data, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         url = f"/api/lecciones/{response.data['id']}/"
@@ -135,7 +226,7 @@ class CursosAPITests(TestCase):
 
     def test_validar_video_y_propiedad_de_curso(self):
         self.client.force_authenticate(self.otro_instructor)
-        data = {'curso': str(self.curso.pk), 'titulo': 'Error', 'video': str(self.video.pk), 'orden': 3}
+        data = {'modulo': str(self.modulo.pk), 'titulo': 'Error', 'video': str(self.video.pk), 'orden': 3}
         self.assertEqual(self.client.post('/api/lecciones/', data, format='json').status_code, 400)
         self.client.force_authenticate(self.instructor)
         ajeno = Video.objects.create(owner=self.otro_instructor, status='uploaded')
@@ -150,14 +241,15 @@ class CursosAPITests(TestCase):
     def test_no_mover_leccion_entre_cursos(self):
         self.client.force_authenticate(self.instructor)
         otro = Curso.objects.create(titulo='Otro', instructor=self.instructor)
-        self.assertEqual(self.client.patch(self.leccion_url, {'curso': str(otro.pk)}, format='json').status_code, 400)
+        ajeno = Modulo.objects.create(curso=otro, titulo='Contenido', orden=1)
+        self.assertEqual(self.client.patch(self.leccion_url, {'modulo': str(ajeno.pk)}, format='json').status_code, 400)
 
     def test_no_vincular_video_eliminado(self):
         self.client.force_authenticate(self.instructor)
         borrado = Video.objects.create(owner=self.instructor, status='uploaded', eliminado_en=timezone.now())
         VideoRendition.objects.create(video=borrado, s3_key=f'videos/{borrado.id}', status='uploaded')
         response = self.client.post('/api/lecciones/', {
-            'curso': str(self.curso.pk), 'video': str(borrado.pk), 'titulo': 'Error', 'orden': 3,
+            'modulo': str(self.modulo.pk), 'video': str(borrado.pk), 'titulo': 'Error', 'orden': 3,
         }, format='json')
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.client.patch(self.leccion_url, {'video': str(borrado.pk)}, format='json').status_code, 400)
@@ -176,7 +268,7 @@ class CursosAPITests(TestCase):
 
         with patch.object(LeccionSerializer, 'validate', eliminar_despues_de_validar):
             response = self.client.post('/api/lecciones/', {
-                'curso': str(self.curso.pk), 'video': str(nuevo.pk), 'titulo': 'Carrera', 'orden': 3,
+                'modulo': str(self.modulo.pk), 'video': str(nuevo.pk), 'titulo': 'Carrera', 'orden': 3,
             }, format='json')
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Leccion.objects.filter(video=nuevo).exists())
@@ -252,7 +344,7 @@ class CursosAPITests(TestCase):
         self.completar(self.segunda)
         self.client.force_authenticate(self.instructor)
         response = self.client.post('/api/lecciones/', {
-            'curso': str(self.curso.pk), 'titulo': 'Nueva', 'video': str(self.video.pk), 'orden': 3,
+            'modulo': str(self.modulo.pk), 'titulo': 'Nueva', 'video': str(self.video.pk), 'orden': 3,
         }, format='json')
         self.assertEqual(response.status_code, 201)
         self.assertEqual(str(Inscripcion.objects.get().porcentaje_avance), '66.66')
@@ -264,7 +356,7 @@ class CursosAPITests(TestCase):
         self.assertEqual(str(Inscripcion.objects.get().porcentaje_avance), '33.33')
 
     def test_curso_vacio_no_emite_certificado(self):
-        self.curso.lecciones.all().delete()
+        Leccion.objects.filter(modulo__curso=self.curso).delete()
         response = self.inscribir()
         self.assertFalse(response.data['completado'])
         self.assertFalse(CertificadoCurso.objects.exists())
@@ -317,7 +409,8 @@ class CursosConcurrentesTests(TransactionTestCase):
         )
         curso = Curso.objects.create(titulo='Concurrencia', instructor=alumno, activo=True)
         video = Video.objects.create(owner=alumno, status='uploaded')
-        lecciones = [Leccion.objects.create(curso=curso, video=video, titulo=str(i), orden=i) for i in range(2)]
+        modulo = Modulo.objects.create(curso=curso, titulo='Contenido', orden=1)
+        lecciones = [Leccion.objects.create(modulo=modulo, video=video, titulo=str(i), orden=i) for i in range(2)]
         Inscripcion.objects.create(curso=curso, usuario=alumno)
         inicio = Barrier(2)
 

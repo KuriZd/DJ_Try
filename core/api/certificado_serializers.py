@@ -2,6 +2,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 from core.models import Certificado, EnvioCertificado, HistorialCertificado, PlantillaCertificado, Postulacion, TipoCertificado
+from core.services.certificados import EMITIDOS
 
 
 class EmitirCertificadoSerializer(serializers.Serializer):
@@ -64,6 +65,37 @@ class CertificadoGestionSerializer(CertificadoDetalleSerializer):
     class Meta(CertificadoDetalleSerializer.Meta):
         fields = CertificadoDetalleSerializer.Meta.fields + ['justificacion_manual', 'observaciones_internas', 'emitido_por']
         read_only_fields = fields
+
+
+class VerificacionCertificadoSerializer(serializers.ModelSerializer):
+    """Lo que se le puede decir de un certificado a quien solo tiene su codigo.
+
+    Deliberadamente corto: confirma que el documento existe, de quien es y si
+    vale. Ni correo, ni matricula, ni el expediente congelado; quien verifica
+    es un tercero que recibio un papel, no alguien con acceso al padron.
+    """
+
+    titular = serializers.SerializerMethodField()
+    tipo_nombre = serializers.SerializerMethodField()
+    vigente = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Certificado
+        fields = [
+            'folio', 'codigo_verificacion', 'estado', 'vigente', 'titular',
+            'tipo', 'tipo_nombre', 'proceso_nombre', 'resultado', 'periodo_participacion',
+            'autoridad_emisora', 'cargo_autoridad', 'emitido_en', 'cancelado_en', 'revocado_en',
+        ]
+        read_only_fields = fields
+
+    def get_titular(self, obj):
+        return obj.aspirante_snapshot.get('generales', {}).get('nombre_completo')
+
+    def get_tipo_nombre(self, obj):
+        return obj.tipo.nombre
+
+    def get_vigente(self, obj):
+        return obj.estado in EMITIDOS
 
 
 class HistorialCertificadoSerializer(serializers.ModelSerializer):

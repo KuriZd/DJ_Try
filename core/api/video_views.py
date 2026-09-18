@@ -42,12 +42,12 @@ class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
             # Un video vinculado a un curso nunca es publico, aun si era unlisted.
             acceso = owner | Q(visibility=Video.Visibility.UNLISTED, lecciones__isnull=True)
             if self.request.user.is_authenticated:
-                acceso |= Q(lecciones__activo=True, lecciones__curso__activo=True,
-                            lecciones__curso__inscripciones__usuario=self.request.user)
+                acceso |= Q(lecciones__activo=True, lecciones__modulo__curso__activo=True,
+                            lecciones__modulo__curso__inscripciones__usuario=self.request.user)
                 if administra_cursos(self.request):
                     acceso |= Q(lecciones__isnull=False)
                 elif 'cursos:crear' in permisos_cursos(self.request):
-                    acceso |= Q(lecciones__curso__instructor=self.request.user)
+                    acceso |= Q(lecciones__modulo__curso__instructor=self.request.user)
             return queryset.filter(acceso).distinct()
         return queryset.filter(owner)
 

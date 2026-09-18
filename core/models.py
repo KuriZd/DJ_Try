@@ -1,30 +1,85 @@
 import uuid
 
 from django.db import models
+from django.utils.text import slugify
 
 
 def nuevo_folio_postulacion():
     return 'POST-' + uuid.uuid4().hex
 
 
+class NivelCurso(models.TextChoices):
+    BASICO = 'basico', 'Basico'
+    INTERMEDIO = 'intermedio', 'Intermedio'
+    AVANZADO = 'avanzado', 'Avanzado'
+
+
+class CategoriaCurso(models.TextChoices):
+    TECNICO = 'tecnico', 'Tecnico'
+    NORMATIVO = 'normativo', 'Normativo'
+    COMERCIAL = 'comercial', 'Comercial'
+    DESARROLLO = 'desarrollo', 'Desarrollo humano'
+
+
+def slug_de_curso(titulo, excluir=None):
+    """Slug unico a partir del titulo, con sufijo -2, -3... si ya existe.
+
+    Se calcula una sola vez, al crear: un slug que cambia con el titulo rompe
+    los enlaces que ya se compartieron. La unicidad definitiva la impone el
+    indice de la columna; esto solo evita el choque previsible.
+    """
+    base = slugify(titulo)[:200] or 'curso'
+    tomados = Curso.objects.exclude(pk=excluir) if excluir else Curso.objects.all()
+    slug, intento = base, 1
+    while tomados.filter(slug=slug).exists():
+        intento += 1
+        slug = f'{base}-{intento}'
+    return slug
+
+
 class Curso(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(max_length=220, unique=True, blank=True)
     titulo = models.CharField(max_length=200)
+    resumen = models.CharField(max_length=300, blank=True)
     descripcion = models.TextField(blank=True)
+    objetivos = models.JSONField(default=list, blank=True)
     imagen = models.URLField(max_length=1000, blank=True)
     instructor = models.ForeignKey('Usuario', models.PROTECT, related_name='cursos_impartidos')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=False)
     duracion_estimada = models.PositiveIntegerField(default=0, help_text='Duracion en segundos.')
-    categoria = models.CharField(max_length=120, blank=True)
+    categoria = models.CharField(max_length=120, choices=CategoriaCurso.choices, blank=True)
+    nivel = models.CharField(max_length=20, choices=NivelCurso.choices, blank=True)
 
     class Meta:
         ordering = ['-fecha_creacion', 'id']
 
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slug_de_curso(self.titulo, self.pk)
+            if kwargs.get('update_fields') is not None:
+                kwargs['update_fields'] = [*kwargs['update_fields'], 'slug']
+        super().save(*args, **kwargs)
+
+
+class Modulo(models.Model):
+    """Agrupa las lecciones de un curso. Es la unidad que ordena el temario."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    curso = models.ForeignKey(Curso, models.CASCADE, related_name='modulos')
+    titulo = models.CharField(max_length=200)
+    resumen = models.TextField(blank=True)
+    orden = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['orden', 'id']
+        constraints = [models.UniqueConstraint(fields=['curso', 'orden'], name='modulo_orden_unico')]
+
 
 class Leccion(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    curso = models.ForeignKey(Curso, models.CASCADE, related_name='lecciones')
+    modulo = models.ForeignKey(Modulo, models.CASCADE, related_name='lecciones')
     titulo = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True)
     video = models.ForeignKey('Video', models.PROTECT, related_name='lecciones')
@@ -34,7 +89,11 @@ class Leccion(models.Model):
 
     class Meta:
         ordering = ['orden', 'id']
-        constraints = [models.UniqueConstraint(fields=['curso', 'orden'], name='curso_orden_unico')]
+        constraints = [models.UniqueConstraint(fields=['modulo', 'orden'], name='modulo_orden_leccion_unico')]
+
+    @property
+    def curso(self):
+        return self.modulo.curso
 
 
 class Inscripcion(models.Model):

@@ -258,6 +258,10 @@ REST_FRAMEWORK = {
         'recuperar': os.getenv('THROTTLE_RECUPERAR', '5/hour'),
         'restablecer': os.getenv('THROTTLE_RESTABLECER', '10/hour'),
         'paypal_webhook': os.getenv('THROTTLE_PAYPAL_WEBHOOK', '120/minute'),
+        # La verificacion es publica y se llega a ella escaneando un QR:
+        # tiene que aguantar a una oficina entera comprobando certificados
+        # y aun asi cortar el sondeo automatizado de codigos.
+        'verificar_certificado': os.getenv('THROTTLE_VERIFICAR_CERTIFICADO', '30/minute'),
     },
 }
 
