@@ -7,7 +7,10 @@ from .certificado_views import (
     TipoCertificadoViewSet,
     verificar_certificado,
 )
-from .curso_views import CursoViewSet, LeccionViewSet, InscripcionViewSet, ProgresoLeccionViewSet, CertificadoCursoViewSet
+from .curso_views import (
+    CursoViewSet, ModuloViewSet, LeccionViewSet, InscripcionViewSet,
+    ProgresoLeccionViewSet, CertificadoCursoViewSet,
+)
 
 from .views import (
     AspiranteViewSet,
@@ -43,6 +46,7 @@ router.register('certificados', CertificadoViewSet, basename='certificado')
 router.register('tipos-certificado', TipoCertificadoViewSet, basename='tipo-certificado')
 router.register('plantillas-certificado', PlantillaCertificadoViewSet, basename='plantilla-certificado')
 router.register('cursos', CursoViewSet, basename='curso')
+router.register('modulos', ModuloViewSet, basename='modulo')
 router.register('lecciones', LeccionViewSet, basename='leccion')
 router.register('inscripciones', InscripcionViewSet, basename='inscripcion')
 router.register('progresos-lecciones', ProgresoLeccionViewSet, basename='progreso-leccion')
