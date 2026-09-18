@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-from core.models import CertificadoCurso, Inscripcion, ProgresoLeccion
+from core.models import CertificadoCurso, Inscripcion, Leccion, ProgresoLeccion
 
 
 def generar_pdf(certificado):
@@ -40,9 +40,9 @@ def recalcular_inscripcion(inscripcion):
     Un certificado acredita la finalizacion en su fecha y se conserva si luego
     se agregan lecciones o el alumno vuelve a marcar una leccion como pendiente.
     """
-    total = inscripcion.curso.lecciones.filter(activo=True).count()
+    total = Leccion.objects.filter(modulo__curso_id=inscripcion.curso_id, activo=True).count()
     vistos = ProgresoLeccion.objects.filter(
-        usuario_id=inscripcion.usuario_id, leccion__curso_id=inscripcion.curso_id,
+        usuario_id=inscripcion.usuario_id, leccion__modulo__curso_id=inscripcion.curso_id,
         leccion__activo=True, visto=True,
     ).count()
     inscripcion.completado = total > 0 and vistos == total
