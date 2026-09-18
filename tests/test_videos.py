@@ -80,10 +80,11 @@ class VideoAPITests(TestCase):
         sign.assert_not_called()
 
     def test_cannot_delete_video_in_inactive_lesson(self):
-        from core.models import Curso, Leccion
+        from core.models import Curso, Leccion, Modulo
 
         curso = Curso.objects.create(titulo='Curso', instructor=self.owner)
-        leccion = Leccion.objects.create(curso=curso, video=self.video, titulo='Tema', orden=1, activo=False)
+        modulo = Modulo.objects.create(curso=curso, titulo='Contenido', orden=1)
+        leccion = Leccion.objects.create(modulo=modulo, video=self.video, titulo='Tema', orden=1, activo=False)
         self.assertEqual(self.client.delete(self.base).status_code, 409)
         self.video.refresh_from_db()
         self.assertIsNone(self.video.eliminado_en)
