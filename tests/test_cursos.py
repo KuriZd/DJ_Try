@@ -6,8 +6,8 @@ from unittest.mock import patch
 from django.db import IntegrityError, close_old_connections, transaction
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
-from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework.test import APIClient, APIRequestFactory
+from core.api.views import abrir_sesion
 
 from core.models import (
     Curso, Modulo, Leccion, Inscripcion, ProgresoLeccion, CertificadoCurso,
@@ -62,7 +62,7 @@ class CursosAPITests(TestCase):
         self.assertEqual(self.client.get('/api/cursos/').status_code, 200)
         self.assertEqual(self.client.get(self.curso_url).status_code, 200)
         self.assertEqual(self.client.post(self.curso_url + 'inscribir/').status_code, 401)
-        token = AccessToken.for_user(self.alumno)
+        token = abrir_sesion(self.alumno, APIRequestFactory().post('/api/auth/login/'))['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
         self.assertEqual(self.client.get('/api/inscripciones/').status_code, 200)
         self.alumno.estado = 'bloqueado'

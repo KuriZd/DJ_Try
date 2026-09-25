@@ -15,7 +15,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
@@ -171,16 +171,25 @@ def token_response(usuario, refresh):
     }
 
 
+@transaction.atomic
 def abrir_sesion(usuario, request):
     """
     Emite el par de tokens y registra la sesión. Lo comparten el acceso y el
     alta de cuenta, que entra autenticada.
     """
+    # Serializar con el cambio de contrasena evita abrir una sesion con una
+    # validacion de password que termino justo antes de una recuperacion.
+    actual = UsuarioModel.objects.select_for_update().get(pk=usuario.pk)
+    if actual.password_hash != usuario.password_hash or not actual.is_active or actual.eliminado_en:
+        raise AuthenticationFailed("Las credenciales cambiaron. Inicia sesión de nuevo.")
+    usuario = actual
+    session_id = uuid.uuid4()
     refresh = RefreshToken.for_user(usuario)
     refresh["email"] = usuario.email
+    refresh["sid"] = str(session_id)
 
     Sesion.objects.create(
-        id=uuid.uuid4(),
+        id=session_id,
         usuario=usuario,
         refresh_token_hash=token_hash(str(refresh)),
         ip=request.META.get("REMOTE_ADDR"),
@@ -233,18 +242,20 @@ def refresh_token(request):
 
     try:
         refresh = RefreshToken(raw_refresh)
+        session_id = uuid.UUID(str(refresh.get("sid", "")))
         session = Sesion.objects.select_related("usuario").get(
+            id=session_id,
             refresh_token_hash=token_hash(raw_refresh),
             revocada_en__isnull=True,
             expira_en__gt=timezone.now(),
         )
-    except (TokenError, Sesion.DoesNotExist):
+    except (TokenError, Sesion.DoesNotExist, ValueError):
         return Response(
             {"detail": "El refresh token no es válido o fue revocado."},
             status=HTTP_401_UNAUTHORIZED,
         )
 
-    if not session.usuario.is_active:
+    if not session.usuario.is_active or session.usuario.eliminado_en:
         return Response(
             {"detail": "El usuario no está activo."},
             status=HTTP_401_UNAUTHORIZED,
@@ -297,6 +308,7 @@ def usuario_actual(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def cambiar_password(request):
     """
     Cambia la contraseña del usuario autenticado.
@@ -305,8 +317,9 @@ def cambiar_password(request):
     `refresh`, esa sesión se conserva para no expulsarlo del navegador actual;
     si no lo envía, se revocan todas.
     """
+    usuario = UsuarioModel.objects.select_for_update().get(pk=request.user.pk)
     serializer = CambioPasswordSerializer(
-        data=request.data, context={"usuario": request.user}
+        data=request.data, context={"usuario": usuario}
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
@@ -372,6 +385,7 @@ def recuperar_password(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RestablecerRateThrottle])
+@transaction.atomic
 def restablecer_password(request):
     """Cambia la contrasena con el token del correo.
 

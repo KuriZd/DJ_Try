@@ -165,6 +165,18 @@ Authorization: Bearer ACCESS_TOKEN
 
 ### Renovar el token
 
+Los tokens de acceso y renovación incluyen `sid`, el identificador de su
+sesión en el servidor. Cada petición autenticada comprueba que la sesión
+pertenezca al usuario, no esté revocada y no haya expirado. Cerrar sesión
+invalida también sus tokens de acceso; recuperar la contraseña invalida todas
+las sesiones del usuario, incluidos los accesos obtenidos mediante renovación.
+
+Al desplegar esta validación, los tokens antiguos sin `sid` dejan de aceptarse
+y es necesario iniciar sesión de nuevo. No requiere migraciones de base de
+datos. El frontend debe tratar el `401` como sesión terminada y volver al login
+si tampoco puede renovar. Una petición ya autorizada antes de la revocación
+puede terminar; la revocación se comprueba al autenticar cada nueva petición.
+
 ```http
 POST /api/auth/refresh/
 Content-Type: application/json
