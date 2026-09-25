@@ -71,3 +71,7 @@ Desktop.ini
 # Herramientas locales de agentes
 .agents/
 .codex/
+.qa_audit
+
+#Archivos Locales
+QA_AUDIT_2026-09-25.md
