@@ -262,6 +262,9 @@ REST_FRAMEWORK = {
         # tiene que aguantar a una oficina entera comprobando certificados
         # y aun asi cortar el sondeo automatizado de codigos.
         'verificar_certificado': os.getenv('THROTTLE_VERIFICAR_CERTIFICADO', '30/minute'),
+        # Cualquier cuenta publica en el muro: el limite es por cuenta y solo
+        # cuenta altas, no ediciones.
+        'publicar': os.getenv('THROTTLE_PUBLICAR', '10/hour'),
     },
 }
 
