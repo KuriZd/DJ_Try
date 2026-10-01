@@ -1,6 +1,6 @@
 import hashlib
 
-from rest_framework.throttling import SimpleRateThrottle
+from rest_framework.throttling import SimpleRateThrottle, UserRateThrottle
 
 
 class IpRateThrottle(SimpleRateThrottle):
@@ -68,3 +68,9 @@ class VerificarCertificadoRateThrottle(IpRateThrottle):
 
 class PaypalWebhookRateThrottle(IpRateThrottle):
     scope = "paypal_webhook"
+
+
+class PublicarRateThrottle(UserRateThrottle):
+    """Cualquier cuenta publica en el muro: el limite frena el spam por cuenta."""
+
+    scope = "publicar"
