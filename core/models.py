@@ -180,6 +180,26 @@ class VideoRendition(models.Model):
         constraints = [models.UniqueConstraint(fields=['video', 'profile'], name='unique_video_profile')]
 
 
+class Publicacion(models.Model):
+    """Entrada del muro de `/actualiza`: la escribe cualquier cuenta activa.
+
+    El cuerpo es texto plano. El frontend respeta saltos de linea y enlaza las
+    URLs, pero nunca lo pinta como HTML: asi no hay nada que sanitizar.
+    """
+
+    LIMITE_CUERPO = 3000
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    autor = models.ForeignKey('Usuario', models.PROTECT, related_name='publicaciones')
+    cuerpo = models.TextField()
+    fecha_publicacion = models.DateTimeField(auto_now_add=True, db_index=True)
+    # Nulo mientras no se edite: el muro marca "editada" solo si hubo cambio.
+    fecha_edicion = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ['-fecha_publicacion', '-id']
+
+
 class EstadoUsuario(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ACTIVO = "activo", "Activo"
