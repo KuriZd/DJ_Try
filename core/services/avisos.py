@@ -49,6 +49,12 @@ RECUPERACION = correo.PlantillaCorreo(
     entidad="usuario",
 )
 
+VERIFICACION = correo.PlantillaCorreo(
+    clave="verificacion",
+    asunto="Confirma tu correo",
+    entidad="usuario",
+)
+
 COMPROBANTE_PAGO = correo.PlantillaCorreo(
     clave="comprobante_pago",
     asunto="Comprobante de tu compra",
@@ -136,6 +142,20 @@ def enviar_recuperacion(usuario, token):
             "nombre": usuario.nombre_completo,
             "enlace": tokens.construir_enlace("/restablecer", token),
             "horas": settings.TOKEN_RECUPERACION_HORAS,
+        },
+        entidad_id=usuario.id,
+    )
+
+
+def enviar_verificacion(usuario, token):
+    """Manda el enlace para confirmar el correo. Nunca lanza."""
+    return correo.enviar(
+        VERIFICACION,
+        usuario.email,
+        {
+            "nombre": usuario.nombre_completo,
+            "enlace": tokens.construir_enlace("/verificar-correo", token),
+            "horas": settings.TOKEN_VERIFICACION_HORAS,
         },
         entidad_id=usuario.id,
     )
