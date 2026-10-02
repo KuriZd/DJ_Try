@@ -89,3 +89,23 @@ class VerificacionCorreoTests(TestCase):
     def test_limite_de_envios_por_cuenta(self):
         codigos = [self.solicitar().status_code for _ in range(4)]
         self.assertEqual(codigos, [204, 204, 204, 429])
+
+
+class VerificacionAlRegistrarseTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_registrarse_manda_el_enlace_y_el_enlace_verifica(self):
+        respuesta = APIClient().post('/api/auth/registro/', {
+            'nombre_completo': 'Nueva Cuenta', 'email': 'nueva@example.test',
+            'password': 'QA-Registro-Fuerte-731!',
+        }, format='json')
+        self.assertEqual(respuesta.status_code, 201, respuesta.data)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['nueva@example.test'])
+        self.assertIn('Confirma tu correo', mail.outbox[0].subject)
+
+        canje = APIClient().post(
+            reverse('api:confirmar-verificacion'), {'token': enlace_del_correo()}, format='json',
+        )
+        self.assertEqual(canje.status_code, 204)
