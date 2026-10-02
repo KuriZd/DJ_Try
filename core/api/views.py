@@ -223,10 +223,18 @@ def login(request):
 @throttle_classes([RegistroRateThrottle])
 @transaction.atomic
 def registro(request):
-    """Da de alta una cuenta con su expediente y la deja autenticada."""
+    """Da de alta una cuenta con su expediente y la deja autenticada.
+
+    Manda de una vez el enlace para verificar el correo, que Actualiza exige
+    para escribir. `enviar_verificacion` nunca lanza: si el correo falla, la
+    cuenta queda creada y el enlace se puede pedir de nuevo desde Actualiza.
+    """
     serializer = RegistroSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     usuario = serializer.save()
+
+    token = tokens_service.emitir(usuario, PropositoToken.VERIFICACION)
+    avisos.enviar_verificacion(usuario, token)
 
     return Response(abrir_sesion(usuario, request), status=HTTP_201_CREATED)
 
