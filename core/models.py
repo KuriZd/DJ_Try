@@ -200,6 +200,104 @@ class Publicacion(models.Model):
         ordering = ['-fecha_publicacion', '-id']
 
 
+class Reaccion(models.Model):
+    """Un "me gusta": uno por cuenta y publicacion, lo impone la base."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(Publicacion, models.CASCADE, related_name='reacciones')
+    usuario = models.ForeignKey('Usuario', models.CASCADE, related_name='reacciones')
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['publicacion', 'usuario'], name='reaccion_publicacion_usuario_unica',
+        )]
+
+
+class Comentario(models.Model):
+    """Comentario plano, sin respuestas anidadas. Texto plano, como la publicacion."""
+
+    LIMITE_CUERPO = 1250
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(Publicacion, models.CASCADE, related_name='comentarios')
+    autor = models.ForeignKey('Usuario', models.PROTECT, related_name='comentarios')
+    cuerpo = models.TextField()
+    fecha_publicacion = models.DateTimeField(auto_now_add=True)
+    fecha_edicion = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ['fecha_publicacion', 'id']
+        indexes = [models.Index(fields=['publicacion', 'fecha_publicacion'])]
+
+
+class MotivoReporte(models.TextChoices):
+    SPAM = 'spam', 'Spam o publicidad'
+    ACOSO = 'acoso', 'Acoso u ofensas'
+    SUPLANTACION = 'suplantacion', 'Suplantación de identidad'
+    INAPROPIADO = 'inapropiado', 'Contenido inapropiado'
+    OTRO = 'otro', 'Otro'
+
+
+class EstadoReporte(models.TextChoices):
+    PENDIENTE = 'pendiente', 'Pendiente'
+    ELIMINADO = 'eliminado', 'Contenido eliminado'
+    DESCARTADO = 'descartado', 'Descartado'
+
+
+class Reporte(models.Model):
+    """Aviso de que una publicacion o un comentario no deberia estar en el muro.
+
+    Apunta a uno de los dos. Las llaves quedan en nulo si el contenido se
+    borra, y por eso el reporte guarda su propia copia de lo reportado y de
+    quien lo escribio: el caso tiene que poder leerse despues de resuelto.
+    """
+
+    LIMITE_DETALLE = 500
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(
+        Publicacion, models.SET_NULL, null=True, blank=True, related_name='reportes',
+    )
+    comentario = models.ForeignKey(
+        Comentario, models.SET_NULL, null=True, blank=True, related_name='reportes',
+    )
+    reportado_por = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, related_name='reportes_hechos',
+    )
+    motivo = models.CharField(max_length=20, choices=MotivoReporte.choices)
+    detalle = models.CharField(max_length=LIMITE_DETALLE, blank=True)
+    cuerpo_reportado = models.TextField()
+    autor_reportado = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, related_name='reportes_recibidos',
+    )
+    estado = models.CharField(
+        max_length=20, choices=EstadoReporte.choices, default=EstadoReporte.PENDIENTE,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    resuelto_por = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, blank=True, related_name='reportes_resueltos',
+    )
+    resuelto_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['creado_en', 'id']
+        indexes = [models.Index(fields=['estado', 'creado_en'])]
+        constraints = [
+            # Una cuenta no reporta dos veces lo mismo mientras siga pendiente.
+            models.UniqueConstraint(
+                fields=['reportado_por', 'publicacion'],
+                condition=models.Q(estado='pendiente', publicacion__isnull=False),
+                name='reporte_publicacion_pendiente_unico',
+            ),
+            models.UniqueConstraint(
+                fields=['reportado_por', 'comentario'],
+                condition=models.Q(estado='pendiente', comentario__isnull=False),
+                name='reporte_comentario_pendiente_unico',
+            ),
+        ]
+
+
 class EstadoUsuario(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ACTIVO = "activo", "Activo"
