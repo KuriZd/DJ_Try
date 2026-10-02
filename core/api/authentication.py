@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
@@ -17,7 +18,7 @@ class UsuarioJWTAuthentication(JWTAuthentication):
 
         try:
             usuario = Usuario.objects.get(id=user_id, eliminado_en__isnull=True)
-        except (Usuario.DoesNotExist, ValueError, TypeError):
+        except (Usuario.DoesNotExist, ValueError, TypeError, ValidationError):
             raise AuthenticationFailed("Usuario no encontrado.")
 
         if usuario.estado != EstadoUsuario.ACTIVO:
