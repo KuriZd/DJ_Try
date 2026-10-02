@@ -1,9 +1,11 @@
 import hashlib
+from collections.abc import Mapping
 import uuid
 from datetime import datetime, timezone as datetime_timezone
 
 from django.db import IntegrityError, connection, transaction
 from django.db.models import F, Q
+from django.db.models.functions import Lower
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -233,7 +235,11 @@ def registro(request):
 @permission_classes([AllowAny])
 @throttle_classes([RefreshRateThrottle])
 def refresh_token(request):
+    if not isinstance(request.data, Mapping):
+        raise ValidationError({"detail": "El cuerpo debe ser un objeto JSON."})
     raw_refresh = request.data.get("refresh")
+    if not isinstance(raw_refresh, str):
+        raise ValidationError({"refresh": "Indica un token de texto."})
     if not raw_refresh:
         return Response(
             {"detail": "El campo refresh es obligatorio."},
@@ -270,7 +276,11 @@ def refresh_token(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def logout(request):
+    if not isinstance(request.data, Mapping):
+        raise ValidationError({"detail": "El cuerpo debe ser un objeto JSON."})
     raw_refresh = request.data.get("refresh")
+    if not isinstance(raw_refresh, str):
+        raise ValidationError({"refresh": "Indica un token de texto."})
     if not raw_refresh:
         return Response(
             {"detail": "El campo refresh es obligatorio."},
@@ -328,7 +338,7 @@ def cambiar_password(request):
         usuario=request.user, revocada_en__isnull=True
     )
 
-    raw_refresh = request.data.get("refresh")
+    raw_refresh = serializer.validated_data.get("refresh")
     if raw_refresh:
         sesiones = sesiones.exclude(refresh_token_hash=token_hash(raw_refresh))
 
@@ -741,7 +751,7 @@ class UsuarioViewSet(viewsets.ReadOnlyModelViewSet):
             # Por nombre: el padron se lee buscando a alguien, y el orden
             # alfabetico es el unico que ayuda a eso. El id desempata para que
             # dos homonimos no bailen entre peticiones.
-            .order_by("nombre_completo", "id")
+            .order_by(Lower("nombre_completo"), "id")
         )
 
 
