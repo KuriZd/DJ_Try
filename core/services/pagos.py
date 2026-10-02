@@ -1,10 +1,11 @@
 import calendar
+import hashlib
 import uuid
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
 from core.models import (
@@ -512,6 +513,10 @@ def _guardar_fallo_al_capturar(orden, error):
     ahora = timezone.now()
     with transaction.atomic():
         orden = OrdenPagoPaypal.objects.select_for_update().get(pk=orden.pk)
+        # La llamada HTTP ocurre sin este bloqueo: un webhook pudo haber
+        # confirmado o reembolsado el pago mientras llegaba el error.
+        if orden.estado in (EstadoPagoPaypal.COMPLETED, EstadoPagoPaypal.REFUNDED):
+            return
         anterior = orden.estado
         # Un corte de red no dice si PayPal cobro o no. La orden se queda como
         # estaba para que un reintento —con el mismo request id— lo averigue;
@@ -699,6 +704,14 @@ def aplicar_resultado_de_captura(
         # que no se entrega nada: lo destraba despues el webhook.
         with transaction.atomic():
             orden = OrdenPagoPaypal.objects.select_for_update().get(pk=orden.pk)
+            # Una respuesta pendiente describe el pasado si otra solicitud
+            # ya completo, cancelo o reembolso la orden.
+            if orden.estado not in (
+                EstadoPagoPaypal.PENDING,
+                EstadoPagoPaypal.CREATED,
+                EstadoPagoPaypal.APPROVED,
+            ):
+                return orden, False
             transaccion_pendiente = _registrar_transaccion(
                 orden, resultado, ahora, EstadoPagoPaypal.PENDING
             )
@@ -741,9 +754,12 @@ def aplicar_resultado_de_captura(
 
     with transaction.atomic():
         orden = OrdenPagoPaypal.objects.select_for_update().get(pk=orden.pk)
-        if orden.estado == EstadoPagoPaypal.COMPLETED:
+        # Releer bajo bloqueo antes de entregar; una captura en vuelo no
+        # puede revocar el efecto de un reembolso ya confirmado.
+        if orden.estado in (EstadoPagoPaypal.COMPLETED, EstadoPagoPaypal.REFUNDED):
             return orden, False
 
+        estado_anterior = orden.estado
         transaccion_captura = _registrar_transaccion(
             orden, resultado, ahora, EstadoPagoPaypal.COMPLETED
         )
@@ -941,7 +957,7 @@ def _orden_del_evento(evento):
 
 
 def _reclamar_evento(evento):
-    """Aparta el evento antes de tocar nada. `None` si ya estaba apartado.
+    """Crea o recupera un intento pendiente; `None` si su cierre es definitivo.
 
     El indice unico sobre `paypal_event_id` es lo que hace idempotente al
     endpoint: PayPal reintenta un aviso hasta que le contestemos 2xx, y dos
@@ -961,7 +977,13 @@ def _reclamar_evento(evento):
                 creado_en=ahora,
             )
     except IntegrityError:
-        return None
+        fila = EventoPagoPaypal.objects.select_for_update().get(
+            paypal_event_id=evento.get("id")
+        )
+        # procesado_en también marca un cierre definitivo sin efecto.
+        if fila.procesado or fila.procesado_en is not None:
+            return None
+        return fila
 
 
 def _cerrar_evento(
@@ -973,6 +995,7 @@ def _cerrar_evento(
     procesado=True,
     mensaje_error=None,
     transaccion=None,
+    reintentable=False,
 ):
     ahora = timezone.now()
     fila.orden = orden
@@ -981,7 +1004,7 @@ def _cerrar_evento(
     fila.estado_nuevo = estado_nuevo
     fila.procesado = procesado
     fila.mensaje_error = mensaje_error
-    fila.procesado_en = ahora if procesado else None
+    fila.procesado_en = None if reintentable else ahora
     fila.save(
         update_fields=[
             "orden",
@@ -999,6 +1022,8 @@ def _denegar_orden(orden, ahora):
     """PayPal rechazo el cobro: no hay dinero y no hay nada que entregar."""
     with transaction.atomic():
         orden = OrdenPagoPaypal.objects.select_for_update().get(pk=orden.pk)
+        if orden.estado in (EstadoPagoPaypal.COMPLETED, EstadoPagoPaypal.REFUNDED):
+            return orden
         orden.estado = EstadoPagoPaypal.FAILED
         orden.codigo_error = "PAYPAL_CAPTURE_DENIED"
         orden.mensaje_error = "PayPal rechazó el cobro."
@@ -1088,19 +1113,35 @@ def _reembolsar_orden(orden, evento, ahora):
 
 
 def procesar_evento_paypal(*, evento, cabeceras):
+    """Verifica la firma y serializa cada evento hasta su cierre o rollback."""
+    if not paypal_client.verificar_firma_webhook(cabeceras=cabeceras, evento=evento):
+        raise FirmaWebhookInvalida("La firma del evento no es de PayPal.")
+    # Un bloqueo por ID mantiene juntos reclamación, entrega y cierre.
+    # Si el proceso muere, PostgreSQL libera el bloqueo y deshace el intento.
+    key = int.from_bytes(hashlib.sha256(str(evento.get("id")).encode()).digest()[:8], "big", signed=True)
+    error = None
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", [key])
+        try:
+            resultado = _procesar_evento_paypal(evento=evento)
+        except PaypalError as fallo:
+            # Persistir el diagnóstico de red antes de devolver 503.
+            error = fallo
+    if error is not None:
+        raise error
+    return resultado
+
+
+def _procesar_evento_paypal(*, evento):
     """Atiende un aviso de PayPal y devuelve en una palabra que se hizo.
 
-    Sale por `FirmaWebhookInvalida` cuando el aviso no viene de PayPal, y deja
+    Se ejecuta con firma verificada y bloqueo transaccional. Deja
     que los fallos de red suban: son los unicos casos en que conviene que
     PayPal reintente. Todo lo demas —un evento que no atendemos, uno cuya
     orden no existe— se archiva y se acusa de recibido, porque reintentarlo
     daria siempre el mismo resultado.
     """
-    if not paypal_client.verificar_firma_webhook(
-        cabeceras=cabeceras, evento=evento
-    ):
-        raise FirmaWebhookInvalida("La firma del evento no es de PayPal.")
-
     fila = _reclamar_evento(evento)
     if fila is None:
         return "duplicado"
@@ -1165,6 +1206,7 @@ def procesar_evento_paypal(*, evento, cabeceras):
             estado_nuevo=orden.estado,
             procesado=False,
             mensaje_error=str(error),
+            reintentable=isinstance(error, PaypalError) and error.code == "PAYPAL_CONNECTION_ERROR",
         )
         # Un corte de red si merece reintento; lo demas ya quedo anotado y
         # volver a intentarlo daria lo mismo.
