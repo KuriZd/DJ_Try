@@ -1,4 +1,4 @@
-"""QA regression assertions: unresolved findings intentionally fail.
+"""Regresiones de los hallazgos de auditoría, conservadas tras corregirlos.
 
 Run with scripts/qa_audit_run.py and the isolated PostgreSQL cluster only.
 """
