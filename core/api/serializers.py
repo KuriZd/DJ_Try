@@ -27,12 +27,14 @@ from core.models import (
     OrigenReportePsicometrico,
     OrdenPagoPaypal,
     PaquetePsicometrico,
+    PropositoToken,
     ReportePsicometrico,
     Rol,
     Usuario,
     UsuarioRol,
     Vacante,
 )
+from core.services import tokens as tokens_service
 
 
 def verify_password(password, encoded_password):
@@ -514,20 +516,20 @@ class RegistroSerializer(serializers.Serializer):
         numeros = [int(folio.split("-")[1]) for folio in folios]
         return max(numeros, default=0) + 1
 
+    def _siguiente_matricula(self, year):
+        prefijo = f"AM{year}-"
+        matriculas = Aspirante.objects.filter(
+            matricula__regex=rf"^AM{year}-\d+$"
+        ).values_list("matricula", flat=True)
+        return max((int(valor[len(prefijo):]) for valor in matriculas), default=0) + 1
+
+    @transaction.atomic
     def create(self, validated_data):
         ahora = timezone.now()
 
-        usuario = Usuario.objects.create(
-            id=uuid.uuid4(),
-            nombre_completo=validated_data["nombre_completo"],
-            email=validated_data["email"],
-            password_hash=make_password(validated_data["password"]),
-            estado=EstadoUsuario.ACTIVO,
-            creado_en=ahora,
-            actualizado_en=ahora,
-        )
-
-        rol = Rol.objects.filter(clave=self.ROL_POR_DEFECTO).first()
+        # El rol existe incluso cuando no hay expedientes: sirve de bloqueo
+        # compartido para asignar ambos consecutivos sin carreras entre altas.
+        rol = Rol.objects.select_for_update().filter(clave=self.ROL_POR_DEFECTO).first()
         if rol is None:
             raise serializers.ValidationError(
                 {
@@ -535,17 +537,38 @@ class RegistroSerializer(serializers.Serializer):
                     "Aplica las migraciones pendientes."
                 }
             )
+        email = validated_data["email"]
+        if Usuario.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({"email": "Ya existe una cuenta con ese correo."})
+        if Aspirante.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({"email": "Ese correo ya está registrado en un expediente."})
+        try:
+            with transaction.atomic():
+                usuario = Usuario.objects.create(
+                    id=uuid.uuid4(),
+                    nombre_completo=validated_data["nombre_completo"],
+                    email=email,
+                    password_hash=make_password(validated_data["password"]),
+                    estado=EstadoUsuario.ACTIVO,
+                    creado_en=ahora,
+                    actualizado_en=ahora,
+                )
+        except IntegrityError:
+            if Usuario.objects.filter(email__iexact=email).exists():
+                raise serializers.ValidationError({"email": "Ya existe una cuenta con ese correo."})
+            raise
         UsuarioRol.objects.create(usuario=usuario, rol=rol, asignado_en=ahora)
 
         for intento in range(self.INTENTOS_FOLIO):
             consecutivo = self._siguiente_consecutivo()
+            matricula = self._siguiente_matricula(ahora.year)
             try:
                 # Savepoint: si el folio choca, se deshace sólo este intento.
                 with transaction.atomic():
                     Aspirante.objects.create(
                         id=f"ASP-{consecutivo:03d}",
                         usuario=usuario,
-                        matricula=f"AM{ahora.year}-{consecutivo:04d}",
+                        matricula=f"AM{ahora.year}-{matricula:04d}",
                         nombre_completo=usuario.nombre_completo,
                         fecha_nacimiento=validated_data.get("fecha_nacimiento"),
                         email=usuario.email,
@@ -867,10 +890,11 @@ class PerfilUpdateSerializer(serializers.Serializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        try:
-            aspirante = instance.aspirante
-        except Aspirante.DoesNotExist:
-            aspirante = None
+        aspirante = Aspirante.objects.select_for_update().filter(usuario=instance).first()
+        if "cedula_profesional" in validated_data and aspirante and aspirante.cedula_profesional:
+            raise serializers.ValidationError({
+                "cedula_profesional": "La cédula profesional ya está registrada; su cambio requiere revisión administrativa."
+            })
 
         try:
             empresa = instance.empresa
@@ -933,9 +957,11 @@ class PerfilUpdateSerializer(serializers.Serializer):
         email_nuevo = validated_data.get("email")
         if email_nuevo and email_nuevo.lower() != instance.email.lower():
             instance.email = email_nuevo
-            # La dirección nueva todavía no está verificada.
+            # La dirección nueva todavía no está verificada, y un enlace que se
+            # mandó a la anterior no debe servir para verificarla.
             instance.email_verificado_en = None
             campos_usuario.extend(["email", "email_verificado_en"])
+            tokens_service.invalidar(instance, PropositoToken.VERIFICACION)
             if aspirante is not None:
                 # El expediente conserva el correo de contacto al que se envían
                 # los certificados; si no se replica, quedaría desactualizado.
@@ -972,9 +998,16 @@ class PerfilUpdateSerializer(serializers.Serializer):
 
         if campos_aspirante:
             aspirante.actualizado_en = ahora
-            aspirante.save(
-                update_fields=[*campos_aspirante, "actualizado_en"]
-            )
+            try:
+                with transaction.atomic():
+                    aspirante.save(update_fields=[*campos_aspirante, "actualizado_en"])
+            except IntegrityError as error:
+                diagnostic = getattr(error.__cause__, 'diag', None)
+                if getattr(diagnostic, 'constraint_name', None) == 'uq_aspirantes_cedula_activa':
+                    raise serializers.ValidationError({
+                        'cedula_profesional': 'Esa cédula profesional ya está registrada en otro expediente.'
+                    }) from error
+                raise
         if campos_empresa:
             empresa.actualizado_en = ahora
             empresa.save(update_fields=[*campos_empresa, "actualizado_en"])
@@ -1038,6 +1071,12 @@ class CambioPasswordSerializer(serializers.Serializer):
     password_nueva = serializers.CharField(
         write_only=True, trim_whitespace=False
     )
+    refresh = serializers.JSONField(required=False, write_only=True)
+
+    def validate_refresh(self, value):
+        if not isinstance(value, str):
+            raise serializers.ValidationError('Indica un token de texto.')
+        return value
 
     def validate_password_actual(self, value):
         usuario = self.context["usuario"]
@@ -1277,6 +1316,14 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
                 estado=EstadoReportePsicometrico.DISPONIBLE,
             )
         )
+        if not self._es_administrador() and any(
+            anterior.origen != OrigenReportePsicometrico.PROPIA
+            or anterior.subido_por_id != self.context["request"].user.pk
+            for anterior in anteriores
+        ):
+            raise serializers.ValidationError({
+                "referencia_evaluacion_externa": "No puedes reemplazar un reporte de plataforma o de otra cuenta."
+            })
         ReportePsicometrico.objects.filter(
             id__in=[anterior.id for anterior in anteriores]
         ).update(
