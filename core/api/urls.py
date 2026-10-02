@@ -1,7 +1,8 @@
 from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 from .video_views import VideoViewSet
-from .publicacion_views import PublicacionViewSet
+from .publicacion_views import ComentarioViewSet, PublicacionViewSet, ReporteViewSet
+from .verificacion_views import confirmar_verificacion, solicitar_verificacion
 from .certificado_views import (
     CertificadoViewSet,
     PlantillaCertificadoViewSet,
@@ -54,6 +55,8 @@ router.register('progresos-lecciones', ProgresoLeccionViewSet, basename='progres
 router.register('certificados-cursos', CertificadoCursoViewSet, basename='certificado-curso')
 router.register('videos', VideoViewSet, basename='video')
 router.register('publicaciones', PublicacionViewSet, basename='publicacion')
+router.register('comentarios', ComentarioViewSet, basename='comentario')
+router.register('reportes', ReporteViewSet, basename='reporte')
 router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
@@ -84,6 +87,12 @@ urlpatterns = [
     path("auth/logout/", logout, name="logout"),
     path("auth/me/", usuario_actual, name="usuario-actual"),
     path("auth/password/", cambiar_password, name="cambiar-password"),
+    path("auth/verificacion/", solicitar_verificacion, name="solicitar-verificacion"),
+    path(
+        "auth/verificacion/confirmar/",
+        confirmar_verificacion,
+        name="confirmar-verificacion",
+    ),
     path(
         "auth/recuperar/", recuperar_password, name="recuperar-password"
     ),
