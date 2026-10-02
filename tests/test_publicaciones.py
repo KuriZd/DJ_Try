@@ -9,11 +9,14 @@ from rest_framework.test import APIClient
 from core.models import Publicacion, Rol, Usuario, UsuarioRol
 
 
-def crear_usuario(rol):
+def crear_usuario(rol, verificado=True):
+    """Cuenta activa; con el correo verificado salvo que se pida lo contrario,
+    porque escribir en el muro lo exige."""
     user = Usuario.objects.create(
         id=uuid.uuid4(), nombre_completo='Persona ' + rol,
         email=f'{uuid.uuid4()}@example.test', password_hash='!', estado='activo',
         creado_en=timezone.now(), actualizado_en=timezone.now(),
+        email_verificado_en=timezone.now() if verificado else None,
     )
     UsuarioRol.objects.create(usuario=user, rol=Rol.objects.get(clave=rol), asignado_en=timezone.now())
     return user
