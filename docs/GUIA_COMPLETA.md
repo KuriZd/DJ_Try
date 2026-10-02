@@ -129,8 +129,8 @@ Content-Type: application/json
 
 ```json
 {
-  "email": "kurizd@djtry.local",
-  "password": "0330"
+  "email": "admin@example.com",
+  "password": "<tu contraseña>"
 }
 ```
 
@@ -316,16 +316,23 @@ compatibilidad con el perfil.
 Los campos pueden permanecer vacíos hasta que el aspirante complete el
 expediente o sean validados por personal autorizado.
 
-## Usuario de desarrollo
+## Aprovisionamiento de administradores
 
-```text
-Email:      kurizd@djtry.local
-Contraseña: 0330
-Rol:        administrador
+Las cuentas demo históricas conservan sus relaciones, pero la migración
+`0033_desactivar_claves_demo` invalida sus hashes publicados y revoca sus
+sesiones. Las contraseñas que ya fueron cambiadas se conservan. Revertir la
+migración no vuelve a habilitar las claves demo.
+
+Después de aplicar las migraciones, crea una cuenta con un correo bajo tu
+control y una contraseña propia:
+
+```powershell
+python manage.py crear_administrador --email admin@example.com --nombre "Administrador"
 ```
 
-Estas credenciales son exclusivamente para desarrollo y deben eliminarse o
-reemplazarse antes de desplegar el proyecto.
+El comando solicita y confirma la contraseña sin mostrarla ni pasarla como
+argumento; valida su fortaleza y rechaza correos existentes. Para recuperar
+una cuenta existente utiliza el flujo de recuperación con acceso a su correo.
 
 ## Conexión desde React
 
