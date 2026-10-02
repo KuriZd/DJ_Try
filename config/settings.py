@@ -232,6 +232,24 @@ PAYPAL_ORDER_TTL_HOURS = int(os.getenv('PAYPAL_ORDER_TTL_HOURS', '3'))
 
 
 # Django REST Framework
+# Los limites de frecuencia (DEFAULT_THROTTLE_RATES) cuentan en esta cache.
+# La de memoria que Django usa por omision es de cada proceso: con varios
+# workers, cada uno llevaria su propia cuenta y el limite real se
+# multiplicaria. Por eso la cuenta vive en Postgres, compartida, en una tabla
+# que crea la migracion 0036. Con REDIS_URL se usa Redis, que aguanta mas
+# trafico (requiere el paquete `redis`).
+REDIS_URL = os.getenv('REDIS_URL', '')
+if REDIS_URL:
+    CACHES = {'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }}
+else:
+    CACHES = {'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'cache_compartida',
+    }}
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'core.api.authentication.UsuarioJWTAuthentication',
@@ -265,6 +283,11 @@ REST_FRAMEWORK = {
         # Cualquier cuenta publica en el muro: el limite es por cuenta y solo
         # cuenta altas, no ediciones.
         'publicar': os.getenv('THROTTLE_PUBLICAR', '10/hour'),
+        'comentar': os.getenv('THROTTLE_COMENTAR', '30/hour'),
+        'enviar_verificacion': os.getenv('THROTTLE_ENVIAR_VERIFICACION', '3/hour'),
+        'confirmar_verificacion': os.getenv('THROTTLE_CONFIRMAR_VERIFICACION', '10/hour'),
+        'reportar': os.getenv('THROTTLE_REPORTAR', '20/hour'),
+        'reaccionar': os.getenv('THROTTLE_REACCIONAR', '120/hour'),
     },
 }
 
