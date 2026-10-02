@@ -1,7 +1,7 @@
 Hola{% if nombre %} {{ nombre }}{% endif %}:
 
-Confirma que esta dirección es tuya para poder postularte a vacantes y
-comprar pruebas psicométricas.
+Confirma que esta dirección es tuya para poder postularte a vacantes,
+comprar pruebas psicométricas y participar en Actualiza.
 
 {{ enlace }}
 
