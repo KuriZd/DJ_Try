@@ -1,5 +1,8 @@
 # Auditoría general para producción — 1 de octubre de 2026
 
+Seguimiento actualizado: [auditoría del 2 de octubre](PRODUCTION_AUDIT_2026-10-02.md).
+Incluye PROD06–PROD08 y la verificación de cache compartida y dependencias.
+
 **Dictamen: todavía no liberar.** Los cinco hallazgos funcionales PROD01–PROD05
 están corregidos en los cambios locales. Quedan un perfil de despliegue
 verificable y el cierre de avisos de
