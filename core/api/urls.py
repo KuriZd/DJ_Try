@@ -1,7 +1,9 @@
 from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 from .video_views import VideoViewSet
-from .publicacion_views import ComentarioViewSet, PublicacionViewSet, ReporteViewSet
+from .publicacion_views import (
+    AdjuntoPublicacionViewSet, ComentarioViewSet, PublicacionViewSet, ReporteViewSet,
+)
 from .verificacion_views import confirmar_verificacion, solicitar_verificacion
 from .certificado_views import (
     CertificadoViewSet,
@@ -57,6 +59,7 @@ router.register('videos', VideoViewSet, basename='video')
 router.register('publicaciones', PublicacionViewSet, basename='publicacion')
 router.register('comentarios', ComentarioViewSet, basename='comentario')
 router.register('reportes', ReporteViewSet, basename='reporte')
+router.register('adjuntos-publicacion', AdjuntoPublicacionViewSet, basename='adjunto-publicacion')
 router.register("usuarios", UsuarioViewSet, basename="usuario")
 router.register("aspirantes", AspiranteViewSet, basename="aspirante")
 router.register("postulaciones", PostulacionViewSet, basename="postulacion")
