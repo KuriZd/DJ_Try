@@ -44,7 +44,12 @@ class Curso(models.Model):
     resumen = models.CharField(max_length=300, blank=True)
     descripcion = models.TextField(blank=True)
     objetivos = models.JSONField(default=list, blank=True)
+    # URL externa heredada. La caratula nueva vive en S3 (`imagen_clave`) y
+    # se entrega firmada; `imagen` queda solo para los cursos que ya la
+    # traian y deja de escribirse desde el API.
     imagen = models.URLField(max_length=1000, blank=True)
+    imagen_clave = models.CharField(max_length=512, blank=True, default='')
+    imagen_tipo = models.CharField(max_length=50, blank=True, default='')
     instructor = models.ForeignKey('Usuario', models.PROTECT, related_name='cursos_impartidos')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=False)
@@ -229,6 +234,51 @@ class Comentario(models.Model):
     class Meta:
         ordering = ['fecha_publicacion', 'id']
         indexes = [models.Index(fields=['publicacion', 'fecha_publicacion'])]
+
+
+class TipoAdjunto(models.TextChoices):
+    IMAGEN = 'imagen', 'Imagen'
+    VIDEO = 'video', 'Video'
+
+
+class EstadoAdjunto(models.TextChoices):
+    PENDIENTE = 'pendiente', 'Pendiente'
+    LISTO = 'listo', 'Listo'
+    RECHAZADO = 'rechazado', 'Rechazado'
+
+
+class AdjuntoPublicacion(models.Model):
+    """Foto o video de una publicacion, guardado en S3 bajo `publicaciones/`.
+
+    Nace antes que la publicacion: el navegador lo sube mientras se escribe, y
+    al publicar se cuelga de ella. Hasta entonces `publicacion` es nulo; los
+    que nunca se publicaron los borra `limpiar_adjuntos`.
+
+    `pendiente` mientras el archivo viaja; `listo` cuando el backend comprobo
+    en S3 que existe, que su tipo es el declarado (tambien por sus primeros
+    bytes) y que cabe. Solo los listos se pueden publicar y se muestran.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    autor = models.ForeignKey('Usuario', models.CASCADE, related_name='adjuntos_publicacion')
+    publicacion = models.ForeignKey(
+        Publicacion, models.CASCADE, null=True, blank=True, related_name='adjuntos',
+    )
+    tipo = models.CharField(max_length=10, choices=TipoAdjunto.choices)
+    content_type = models.CharField(max_length=50)
+    s3_key = models.CharField(max_length=512, unique=True, editable=False)
+    tamano = models.PositiveBigIntegerField(null=True, blank=True)
+    # Texto alternativo de una foto: lo lee el lector de pantalla.
+    descripcion = models.CharField(max_length=300, blank=True)
+    orden = models.PositiveSmallIntegerField(default=0)
+    estado = models.CharField(
+        max_length=10, choices=EstadoAdjunto.choices, default=EstadoAdjunto.PENDIENTE,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['orden', 'creado_en']
+        indexes = [models.Index(fields=['publicacion', 'orden'])]
 
 
 class MotivoReporte(models.TextChoices):
