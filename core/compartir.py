@@ -17,10 +17,27 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 
 from core.api.publicacion_views import cuenta_visible
-from core.models import Publicacion
+from core.models import EstadoAdjunto, Publicacion, TipoAdjunto
+from core.services import medios_publicacion
 
 # Lo que muestran las tarjetas de vista previa antes de cortar.
 LIMITE_DESCRIPCION = 200
+
+# La imagen de la vista previa la guardan los rastreadores; se firma por el
+# maximo que admite S3 (7 dias) para que no caduque antes de que la lean.
+VIGENCIA_IMAGEN = 7 * 24 * 60 * 60
+
+
+def imagen_de(publicacion):
+    foto = publicacion.adjuntos.filter(
+        estado=EstadoAdjunto.LISTO, tipo=TipoAdjunto.IMAGEN,
+    ).order_by('orden').first()
+    if foto is None:
+        return None
+    try:
+        return medios_publicacion.url_de_lectura(foto.s3_key, foto.content_type, VIGENCIA_IMAGEN)
+    except medios_publicacion.ERRORES_S3:
+        return None
 
 
 def resumen(texto, limite=LIMITE_DESCRIPCION):
@@ -40,7 +57,8 @@ def compartir_publicacion(request, pk):
     destino = f'{settings.FRONTEND_BASE_URL}/actualiza/publicacion/{publicacion.pk}'
     respuesta = render(request, 'compartir/publicacion.html', {
         'titulo': f'{publicacion.autor.nombre_completo} en Actualiza · AMIS',
-        'descripcion': resumen(publicacion.cuerpo),
+        'descripcion': resumen(publicacion.cuerpo) or 'Publicación con fotos o video en Actualiza.',
+        'imagen': imagen_de(publicacion),
         'destino': destino,
         'publicada_en': publicacion.fecha_publicacion,
     })
