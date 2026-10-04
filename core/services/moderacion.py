@@ -17,6 +17,16 @@ from django.db.models import Q
 from django.utils import timezone
 
 from core.models import Auditoria, Comentario, EstadoReporte, Publicacion, Reporte
+from core.services import medios_publicacion
+
+
+def _texto_para_reporte(contenido):
+    """El texto que copia el reporte. Una publicacion de solo fotos no tiene
+    cuerpo; sin esto, el caso se leeria vacio en la cola de moderacion."""
+    if contenido.cuerpo or not isinstance(contenido, Publicacion):
+        return contenido.cuerpo
+    cuantos = contenido.adjuntos.count()
+    return f'[Publicacion sin texto, con {cuantos} foto(s) o video]'
 
 
 def _copia(contenido):
@@ -70,6 +80,9 @@ def eliminar(request, contenido, motivo):
     `motivo` explica en la auditoria por que pudo hacerlo quien lo hizo:
     'moderacion', 'autor_publicacion' o 'reporte'. Si es lo propio no se
     audita, pero sus reportes pendientes igual se cierran.
+
+    Las fotos y el video de una publicacion se borran de S3 solo cuando la
+    transaccion se confirma: si algo la deshace, los archivos siguen ahi.
     """
     cerrar_reportes(contenido, EstadoReporte.ELIMINADO, request.user)
     if contenido.autor_id != request.user.pk:
@@ -77,7 +90,13 @@ def eliminar(request, contenido, motivo):
             request, 'eliminar', _entidad(contenido), contenido.pk,
             anteriores={**_copia(contenido), 'motivo': motivo},
         )
+    claves = (
+        list(contenido.adjuntos.values_list('s3_key', flat=True))
+        if isinstance(contenido, Publicacion) else []
+    )
     contenido.delete()
+    if claves:
+        transaction.on_commit(lambda: medios_publicacion.borrar(claves))
 
 
 def reportar(usuario, contenido, motivo, detalle):
@@ -98,7 +117,7 @@ def reportar(usuario, contenido, motivo, detalle):
                 reportado_por=usuario,
                 motivo=motivo,
                 detalle=detalle,
-                cuerpo_reportado=contenido.cuerpo,
+                cuerpo_reportado=_texto_para_reporte(contenido),
                 autor_reportado_id=contenido.autor_id,
                 **{campo: contenido},
             ), True
