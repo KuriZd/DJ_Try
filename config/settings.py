@@ -175,6 +175,16 @@ AWS_S3_SIGNATURE_VERSION = 's3v4'
 VIDEO_UPLOAD_URL_TTL = 600
 VIDEO_PLAYBACK_URL_TTL = 3600
 VIDEO_MAX_BYTES = int(os.getenv('VIDEO_MAX_BYTES', str(1024 * 1024 * 1024)))
+# Fotos y videos del muro de Actualiza: mismo bucket, prefijo `publicaciones/`.
+# La politica IAM de la app tiene que permitir Put/Get/Delete en ese prefijo.
+PUBLICACION_MAX_IMAGENES = int(os.getenv('PUBLICACION_MAX_IMAGENES', '4'))
+PUBLICACION_IMAGEN_MAX_BYTES = int(os.getenv('PUBLICACION_IMAGEN_MAX_BYTES', str(10 * 1024 * 1024)))
+PUBLICACION_VIDEO_MAX_BYTES = int(os.getenv('PUBLICACION_VIDEO_MAX_BYTES', str(200 * 1024 * 1024)))
+# Cuanto dura la URL firmada con la que se ve una foto o un video del muro.
+PUBLICACION_MEDIA_URL_TTL = int(os.getenv('PUBLICACION_MEDIA_URL_TTL', str(6 * 60 * 60)))
+# Caratula de un curso: mismo bucket, prefijo `cursos/{id}/`. La politica IAM
+# tiene que permitir Put/Get/Delete tambien ahi.
+CURSO_PORTADA_MAX_BYTES = int(os.getenv('CURSO_PORTADA_MAX_BYTES', str(5 * 1024 * 1024)))
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
@@ -288,6 +298,7 @@ REST_FRAMEWORK = {
         'confirmar_verificacion': os.getenv('THROTTLE_CONFIRMAR_VERIFICACION', '10/hour'),
         'reportar': os.getenv('THROTTLE_REPORTAR', '20/hour'),
         'reaccionar': os.getenv('THROTTLE_REACCIONAR', '120/hour'),
+        'subir_adjunto': os.getenv('THROTTLE_SUBIR_ADJUNTO', '40/hour'),
     },
 }
 
