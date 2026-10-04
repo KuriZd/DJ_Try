@@ -110,3 +110,9 @@ class ReaccionarRateThrottle(UserRateThrottle):
     la base cada vez; el limite corta la rafaga sin estorbar a quien lee."""
 
     scope = "reaccionar"
+
+
+class SubirAdjuntoRateThrottle(UserRateThrottle):
+    """Cada carga firma una URL y ocupa espacio en S3: un tope por cuenta."""
+
+    scope = "subir_adjunto"
