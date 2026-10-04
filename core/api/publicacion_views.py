@@ -1,26 +1,33 @@
 import uuid
 
 from django.db import transaction
-from django.db.models import Count, IntegerField, OuterRef, Subquery
+from django.db.models import Count, IntegerField, OuterRef, Prefetch, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from botocore.exceptions import ClientError
+from django.conf import settings
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import SAFE_METHODS, AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 
-from core.models import Comentario, EstadoReporte, EstadoUsuario, Publicacion, Reaccion, Reporte
-from core.services import moderacion
+from core.models import (
+    AdjuntoPublicacion, Comentario, EstadoAdjunto, EstadoReporte, EstadoUsuario, Publicacion,
+    Reaccion, Reporte,
+)
+from core.services import medios_publicacion, moderacion
 from .curso_views import APIPrivada
 from .publicacion_serializers import (
-    ComentarioSerializer, CrearReporteSerializer, EstadoReaccionSerializer,
-    PublicacionSerializer, ReporteSerializer, ResolverReporteSerializer,
+    AdjuntoSerializer, ComentarioSerializer, CrearAdjuntoSerializer, CrearReporteSerializer,
+    EstadoReaccionSerializer, PublicacionSerializer, ReporteSerializer, ResolverReporteSerializer,
 )
 from .serializers import permisos_de
 from .throttles import (
     ComentarRateThrottle, PublicarRateThrottle, ReaccionarRateThrottle, ReportarRateThrottle,
+    SubirAdjuntoRateThrottle,
 )
 
 # Lo que cabe en una consulta de "mis reacciones": un par de paginas del muro.
@@ -190,6 +197,9 @@ class PublicacionViewSet(APIPrivada, viewsets.ModelViewSet):
         return (
             Publicacion.objects.select_related('autor')
             .filter(**cuenta_visible('autor'))
+            .prefetch_related(Prefetch(
+                'adjuntos', queryset=AdjuntoPublicacion.objects.filter(estado=EstadoAdjunto.LISTO),
+            ))
             .annotate(
                 total_reacciones=total_visible(Reaccion, 'usuario'),
                 total_comentarios=total_visible(Comentario, 'autor'),
@@ -336,3 +346,98 @@ class ReporteViewSet(APIPrivada, mixins.ListModelMixin, viewsets.GenericViewSet)
                 moderacion.descartar(request, reporte)
         reporte.refresh_from_db()
         return Response(ReporteSerializer(reporte).data)
+
+
+class AlmacenamientoNoDisponible(APIException):
+    status_code = 503
+    default_detail = 'El almacenamiento de fotos y videos no esta disponible. Intenta de nuevo.'
+
+
+class AdjuntoPublicacionViewSet(APIPrivada, mixins.UpdateModelMixin, mixins.DestroyModelMixin,
+                                viewsets.GenericViewSet):
+    """Fotos y videos de una publicacion que se esta escribiendo.
+
+        POST   adjuntos-publicacion/                 { content_type, tamano } -> URL de subida
+        PUT    {upload_url}                          el navegador, directo a S3
+        POST   adjuntos-publicacion/{id}/confirmar/  comprueba el archivo en S3
+        PATCH  adjuntos-publicacion/{id}/            { descripcion } texto alternativo
+        DELETE adjuntos-publicacion/{id}/            descarta uno que no se publico
+
+    Cada quien ve y toca solo los suyos. Subir pide el correo verificado, como
+    publicar; descartar no.
+    """
+
+    serializer_class = AdjuntoSerializer
+    permission_classes = [IsAuthenticated, ConCorreoVerificado]
+    http_method_names = ['post', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return AdjuntoPublicacion.objects.none()
+        return AdjuntoPublicacion.objects.filter(autor=self.request.user)
+
+    def get_throttles(self):
+        if self.action == 'create':
+            return [SubirAdjuntoRateThrottle()]
+        return super().get_throttles()
+
+    def create(self, request):
+        datos = CrearAdjuntoSerializer(data=request.data)
+        datos.is_valid(raise_exception=True)
+        try:
+            with transaction.atomic():
+                adjunto = AdjuntoPublicacion(
+                    autor=request.user, tipo=datos.validated_data['tipo'],
+                    content_type=datos.validated_data['content_type'],
+                    descripcion=datos.validated_data['descripcion'],
+                )
+                adjunto.s3_key = medios_publicacion.clave_para(adjunto)
+                adjunto.save()
+                url, headers = medios_publicacion.url_de_subida(adjunto.s3_key, adjunto.content_type)
+        except medios_publicacion.ERRORES_S3 as error:
+            raise AlmacenamientoNoDisponible() from error
+        return Response({
+            'adjunto': AdjuntoSerializer(adjunto).data,
+            'upload_url': url, 'method': 'PUT', 'headers': headers,
+            'expires_in': settings.VIDEO_UPLOAD_URL_TTL,
+        }, status=201)
+
+    @action(detail=True, methods=['post'])
+    def confirmar(self, request, pk=None):
+        with transaction.atomic():
+            adjunto = get_object_or_404(self.get_queryset().select_for_update(), pk=pk)
+            if adjunto.estado == EstadoAdjunto.LISTO:
+                return Response(AdjuntoSerializer(adjunto).data)
+            if adjunto.estado == EstadoAdjunto.RECHAZADO:
+                return Response({'detail': 'El archivo fue rechazado. Sube otro.'}, status=409)
+            try:
+                tamano, content_type, inicio = medios_publicacion.inspeccionar(adjunto.s3_key)
+            except ClientError as error:
+                if medios_publicacion.aun_no_existe(error):
+                    return Response({'detail': 'El archivo todavia no termina de subirse.'}, status=409)
+                raise AlmacenamientoNoDisponible() from error
+            except medios_publicacion.ERRORES_S3 as error:
+                raise AlmacenamientoNoDisponible() from error
+
+            valido = medios_publicacion.es_valido(adjunto, tamano, content_type, inicio)
+            adjunto.tamano = tamano
+            adjunto.estado = EstadoAdjunto.LISTO if valido else EstadoAdjunto.RECHAZADO
+            adjunto.save(update_fields=['tamano', 'estado'])
+            if not valido:
+                # Lo rechazado no se queda en S3.
+                clave = adjunto.s3_key
+                transaction.on_commit(lambda: medios_publicacion.borrar([clave]))
+        if not valido:
+            return Response({'detail': 'El archivo no es una foto o un video valido, o es demasiado grande.'},
+                            status=400)
+        return Response(AdjuntoSerializer(adjunto).data)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        adjunto = get_object_or_404(self.get_queryset().select_for_update(), pk=kwargs['pk'])
+        if adjunto.publicacion_id:
+            return Response({'detail': 'Ya forma parte de una publicacion.'}, status=409)
+        clave = adjunto.s3_key
+        adjunto.delete()
+        transaction.on_commit(lambda: medios_publicacion.borrar([clave]))
+        return Response(status=204)
