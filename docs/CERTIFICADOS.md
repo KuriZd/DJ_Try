@@ -14,3 +14,12 @@ y `envios`. Probar emisión, PDF, verificación pública y revocación en stagin
 No confundir este módulo con el certificado de finalización de un curso.
 
 Ver [guía completa](GUIA_COMPLETA.md) y [producción Azure](PRODUCCION_AZURE.md).
+
+## Integración pendiente
+
+La emisión para reclutamiento es manual y exige justificación. Para automatizarla
+se deben definir las reglas de aprobación. Se conserva `aspirantes.folio_aplicacion`
+por compatibilidad.
+
+Falta integrar y comprobar la pantalla del frontend y revisar los textos
+institucionales con su responsable.

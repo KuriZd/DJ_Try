@@ -29,7 +29,6 @@ DJ_Try/
 ├── docs/                   # Documentación ampliada
 ├── manage.py
 ├── README.md
-├── TODO.md
 └── requirements.txt
 ```
 
@@ -352,5 +351,5 @@ const data = await response.json();
 
 ## Trabajo pendiente
 
-El folio por postulación, la estructura obligatoria del snapshot y las pruebas
-del contenido de certificados están registrados en [`../TODO.md`](../TODO.md).
+Los pendientes de integración y emisión automática se describen en
+[Certificados](CERTIFICADOS.md#integración-pendiente).

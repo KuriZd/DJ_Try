@@ -43,8 +43,8 @@ Las reproducciones corregidas ahora participan en discovery habitual.
 - Acordar reembolsos parciales, retención y acceso a documentos, cuotas y
   limpieza de cargas abandonadas. Revisar los datos demo sembrados por migraciones.
 
-Los informes de auditoría anteriores se conservan como evidencia histórica;
-no deben interpretarse como estado actualizado después de estas correcciones.
+Los informes históricos de auditoría se pueden consultar en el historial de Git;
+este documento resume el estado posterior a las correcciones.
 La reproducción QAS03 original mantiene su expectativa anterior (409) y no
 es el contrato adoptado para un 403 sin contexto IAM.
 
