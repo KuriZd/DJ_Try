@@ -55,7 +55,7 @@ class CompartirTests(TestCase):
         html = respuesta.content.decode()
         destino = f'{settings.FRONTEND_BASE_URL}/actualiza/publicacion/{self.publicacion.pk}'
         self.assertIn(f'<meta property="og:url" content="{destino}">', html)
-        self.assertIn(f'content="{self.autor.nombre_completo} en Actualiza · AMIS"', html)
+        self.assertIn(f'content="{self.autor.nombre_completo} en Actualiza · AISER"', html)
         self.assertIn(f'<meta http-equiv="refresh" content="0; url={destino}">', html)
         self.assertEqual(respuesta['Cache-Control'], 'public, max-age=300')
 

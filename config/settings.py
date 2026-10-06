@@ -25,10 +25,11 @@ DATABASE_SQL_DIR = BASE_DIR / 'database'
 
 # Configuración local de PayPal. Las variables definidas por el sistema tienen
 # prioridad y el archivo permanece fuera de Git mediante `.env.*`.
-load_dotenv(BASE_DIR / '.env.paypal', override=False)
+if os.getenv('DJANGO_SETTINGS_MODULE') != 'config.production':
+    load_dotenv(BASE_DIR / '.env.paypal', override=False)
 # Configuracion local general (BD, clave Django y S3). El entorno del proceso
 # y la configuracion PayPal anterior conservan prioridad.
-load_dotenv(BASE_DIR / '.env', override=False)
+    load_dotenv(BASE_DIR / '.env', override=False)
 
 
 # Quick-start development settings - unsuitable for production
@@ -43,7 +44,7 @@ def env_bool(nombre, default=False):
 # En una demo local se genera una clave efimera si aun no se configuro una.
 # Reiniciar el servidor invalida sus JWT, lo cual hace visible la omision sin
 # conservar una clave publica en Git. Fuera de DEBUG la clave es obligatoria.
-DEBUG = env_bool("DJANGO_DEBUG", True)
+DEBUG = env_bool("DJANGO_DEBUG", os.getenv('DJANGO_SETTINGS_MODULE') != 'config.production')
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
 if not SECRET_KEY:
     if not DEBUG:
@@ -167,6 +168,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = Path(os.getenv('STATIC_ROOT', BASE_DIR / 'staticfiles'))
 
 # Alias separado: los reportes privados existentes conservan su storage local.
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
@@ -179,6 +181,7 @@ VIDEO_MAX_BYTES = int(os.getenv('VIDEO_MAX_BYTES', str(1024 * 1024 * 1024)))
 # La politica IAM de la app tiene que permitir Put/Get/Delete en ese prefijo.
 PUBLICACION_MAX_IMAGENES = int(os.getenv('PUBLICACION_MAX_IMAGENES', '4'))
 PUBLICACION_IMAGEN_MAX_BYTES = int(os.getenv('PUBLICACION_IMAGEN_MAX_BYTES', str(10 * 1024 * 1024)))
+IMAGEN_MAX_PIXELES = int(os.getenv('IMAGEN_MAX_PIXELES', '20000000'))
 PUBLICACION_VIDEO_MAX_BYTES = int(os.getenv('PUBLICACION_VIDEO_MAX_BYTES', str(200 * 1024 * 1024)))
 # Cuanto dura la URL firmada con la que se ve una foto o un video del muro.
 PUBLICACION_MEDIA_URL_TTL = int(os.getenv('PUBLICACION_MEDIA_URL_TTL', str(6 * 60 * 60)))
@@ -261,6 +264,9 @@ else:
     }}
 
 REST_FRAMEWORK = {
+    # Por defecto se ignoran IPs declaradas por el cliente. Solo configurar
+    # proxies cuando el backend sea privado y estos reescriban la cabecera.
+    'NUM_PROXIES': int(os.getenv('DJANGO_NUM_PROXIES', '0')),
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'core.api.authentication.UsuarioJWTAuthentication',
     ],
@@ -353,7 +359,7 @@ EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
 # que no responde retrasaria un alta o un cobro tanto como tarde este numero.
 EMAIL_TIMEOUT = float(os.getenv('EMAIL_TIMEOUT', '5'))
 
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'AMIS <no-reply@amis.org>')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'AISER <no-reply@aiser.mx>')
 
 # Jaula del entorno de pruebas.
 #

@@ -15,8 +15,7 @@ from rest_framework.test import APIClient
 from core.models import AdjuntoPublicacion, EstadoAdjunto, Publicacion, Reporte, TipoAdjunto
 from tests.test_publicaciones import crear_usuario
 
-JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 12
-PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 8
+from tests.media_fixtures import JPEG, PNG
 MP4 = b'\x00\x00\x00\x18ftypmp42' + b'\x00' * 4
 HTML = b'<html><script>x'
 
@@ -25,7 +24,7 @@ def s3_falso(tamano=1000, content_type='image/jpeg', inicio=JPEG):
     cliente = MagicMock()
     cliente.generate_presigned_url.side_effect = lambda op, Params, **kw: f"https://s3.test/{Params['Key']}?{op}"
     cliente.head_object.return_value = {'ContentLength': tamano, 'ContentType': content_type}
-    cliente.get_object.return_value = {'Body': io.BytesIO(inicio)}
+    cliente.get_object.side_effect = lambda **kw: {'Body': io.BytesIO(inicio)}
     return cliente
 
 

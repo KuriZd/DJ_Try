@@ -5,6 +5,8 @@ usuarios, aspirantes, perfiles profesionales, postulaciones y certificados.
 
 ## Documentación del proyecto
 
+- [Primera versión en Azure](docs/PRODUCCION_AZURE.md): perfil de producción, variables, arranque y aceptación en staging.
+
 - [Certificados](docs/CERTIFICADOS.md): emisión, PDF, permisos y contrato para el frontend.
 
 - [Guía completa](docs/GUIA_COMPLETA.md): configuración, autenticación y endpoints.

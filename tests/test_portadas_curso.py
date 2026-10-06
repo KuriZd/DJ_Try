@@ -11,8 +11,7 @@ from rest_framework.test import APIClient
 
 from core.models import Curso, Rol, Usuario, UsuarioRol
 
-JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 12
-PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 8
+from tests.media_fixtures import JPEG, PNG
 HTML = b'<html><script>x'
 
 

@@ -28,7 +28,6 @@ schema_view = get_schema_view(
         title="DJ Try API",
         default_version="v1",
         description="Documentacion interactiva de la API de DJ Try.",
-        terms_of_service="https://www.AMISITE.com/policies/terms/",
         contact=openapi.Contact(email="KuriZd@Protonmail.com"),
         license=openapi.License(name="BSD License"),
     ),

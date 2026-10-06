@@ -178,7 +178,7 @@ class CursoViewSet(APIPrivada, viewsets.ModelViewSet):
 
             if not portadas_curso.es_valida(content_type, tamano, guardado, inicio):
                 # Lo rechazado no se queda en S3.
-                transaction.on_commit(lambda: portadas_curso.borrar([clave]))
+                transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, clave))
                 limite = settings.CURSO_PORTADA_MAX_BYTES // (1024 * 1024)
                 return Response({
                     'detail': f'El archivo no es una imagen JPG, PNG o WebP valida, o pasa de {limite} MB.',
@@ -188,7 +188,7 @@ class CursoViewSet(APIPrivada, viewsets.ModelViewSet):
             curso.imagen_clave, curso.imagen_tipo, curso.imagen = clave, content_type, ''
             curso.save(update_fields=['imagen_clave', 'imagen_tipo', 'imagen'])
             if anterior and anterior != clave:
-                transaction.on_commit(lambda: portadas_curso.borrar([anterior]))
+                transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, anterior))
 
         return Response(CursoSerializer(curso, context=self.get_serializer_context()).data)
 
@@ -198,7 +198,7 @@ class CursoViewSet(APIPrivada, viewsets.ModelViewSet):
             anterior = curso.imagen_clave
             curso.imagen_clave, curso.imagen_tipo, curso.imagen = '', '', ''
             curso.save(update_fields=['imagen_clave', 'imagen_tipo', 'imagen'])
-            transaction.on_commit(lambda: portadas_curso.borrar([anterior]))
+            transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, anterior))
         return Response(CursoSerializer(curso, context=self.get_serializer_context()).data)
 
     @swagger_auto_schema(request_body=no_body, responses={200: InscripcionSerializer, 201: InscripcionSerializer})

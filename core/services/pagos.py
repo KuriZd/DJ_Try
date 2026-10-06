@@ -669,10 +669,8 @@ def _verificar_monto(orden, resultado):
     """
     cobrado = _a_decimal(resultado.get("monto"))
     moneda = (resultado.get("moneda") or "").upper()
-    if cobrado is None and not moneda:
-        # PayPal no desglosó el importe; no hay nada que contradecir.
-        return
-    if cobrado != orden.monto or moneda != orden.moneda.upper():
+    if (cobrado is None or not cobrado.is_finite()
+            or cobrado != orden.monto or moneda != orden.moneda.upper()):
         raise MontoCapturadoDistinto(
             f"PayPal cobró {cobrado} {moneda or '?'} y la orden es por "
             f"{orden.monto} {orden.moneda}."
@@ -1084,6 +1082,12 @@ def _reembolsar_orden(orden, evento, ahora):
     monto = recurso.get("amount") or {}
     with transaction.atomic():
         orden = OrdenPagoPaypal.objects.select_for_update().get(pk=orden.pk)
+        # Dos eventos distintos pueden referirse al mismo refund. Repetir la
+        # consulta bajo el bloqueo serializa su registro por orden.
+        if refund_id and TransaccionPagoPaypal.objects.filter(
+            paypal_refund_id=refund_id
+        ).exists():
+            return orden, None
         devolucion = TransaccionPagoPaypal.objects.create(
             id=uuid.uuid4(),
             orden=orden,

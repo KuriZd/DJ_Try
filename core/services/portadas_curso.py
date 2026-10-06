@@ -17,6 +17,9 @@ import re
 import uuid
 
 from django.conf import settings
+from django.db import transaction
+
+from core.models import Curso
 
 from core.services import medios_publicacion
 
@@ -62,6 +65,7 @@ def es_valida(content_type, tamano, content_type_guardado, inicio):
         content_type_guardado == content_type
         and 0 < tamano <= settings.CURSO_PORTADA_MAX_BYTES
         and firma_ok(inicio)
+        and medios_publicacion.imagen_valida(inicio, content_type)
     )
 
 
@@ -82,3 +86,15 @@ def url_de_lectura(curso):
 
 def borrar(claves):
     medios_publicacion.borrar([clave for clave in claves if clave])
+
+
+def borrar_si_retirada(curso_id, clave):
+    # Mantener el mismo bloqueo que confirmar_portada durante el borrado S3.
+    # Una consulta sin bloqueo dejaría una carrera entre comprobar y borrar.
+    if not clave:
+        return
+    with transaction.atomic():
+        curso = Curso.objects.select_for_update().filter(pk=curso_id).first()
+        if curso and curso.imagen_clave == clave:
+            return
+        borrar([clave])

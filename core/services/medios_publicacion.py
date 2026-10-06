@@ -7,15 +7,18 @@ modo que nadie necesita sesion para ver una foto, pero ningun archivo queda
 expuesto de forma permanente.
 
 Al confirmar una carga no basta con creer el Content-Type: S3 guarda el que
-declaro el navegador. Se leen los primeros bytes y se exige la firma del
-formato. Asi una pagina HTML renombrada a .png no entra al muro.
+declaró el navegador. Se exige firma y decodificación completa de imágenes,
+con límites de bytes y píxeles. Para MP4 se comprueba la firma inicial.
 """
 
 import logging
+import io
+import warnings
 
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from PIL import Image
 
 from core.models import TipoAdjunto
 from core.services.videos import s3_video_storage
@@ -103,13 +106,43 @@ def url_de_lectura(clave, content_type, vigencia=None):
 
 
 def inspeccionar(clave):
-    """(tamano, content_type guardado, primeros bytes) del archivo en S3."""
+    """Lee imagen completa con límite; para videos solo lee la firma."""
     cliente, bucket = s3_video_storage()
     cabecera = cliente.head_object(Bucket=bucket, Key=clave)
-    inicio = cliente.get_object(
-        Bucket=bucket, Key=clave, Range=f'bytes=0-{BYTES_FIRMA - 1}',
-    )['Body'].read()
-    return cabecera.get('ContentLength', 0), cabecera.get('ContentType'), inicio
+    tamano, content_type = cabecera.get('ContentLength', 0), cabecera.get('ContentType')
+    limite = max(settings.PUBLICACION_IMAGEN_MAX_BYTES, settings.CURSO_PORTADA_MAX_BYTES)
+    imagen = content_type in ('image/jpeg', 'image/png', 'image/webp')
+    if imagen and not 0 < tamano <= limite:
+        return tamano, content_type, b''
+    cantidad = limite + 1 if imagen else BYTES_FIRMA
+    cuerpo = cliente.get_object(
+        Bucket=bucket, Key=clave, Range=f'bytes=0-{cantidad - 1}',
+    )['Body']
+    try:
+        inicio = cuerpo.read(cantidad)
+    finally:
+        cuerpo.close()
+    return tamano, content_type, inicio
+
+
+def imagen_valida(datos, content_type):
+    """Exige estructura y píxeles decodificables sin imágenes desmesuradas."""
+    formato = {'image/jpeg': 'JPEG', 'image/png': 'PNG', 'image/webp': 'WEBP'}.get(content_type)
+    if not formato:
+        return False
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(datos)) as imagen:
+                if (imagen.format != formato or imagen.width * imagen.height > settings.IMAGEN_MAX_PIXELES
+                        or getattr(imagen, 'n_frames', 1) != 1):
+                    return False
+                imagen.verify()
+            with Image.open(io.BytesIO(datos)) as imagen:
+                imagen.load()
+        return True
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return False
 
 
 def aun_no_existe(error):
@@ -129,6 +162,7 @@ def es_valido(adjunto, tamano, content_type, inicio):
         content_type == adjunto.content_type
         and 0 < tamano <= tamano_maximo(adjunto.tipo)
         and firma_ok(inicio)
+        and (adjunto.tipo != TipoAdjunto.IMAGEN or imagen_valida(inicio, content_type))
     )
 
 

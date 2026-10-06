@@ -8,6 +8,7 @@ Aqui viven tambien los reconstructores que usa `reintentar_correos`: solo los
 correos sin secretos y derivables de la base pueden reintentarse.
 """
 
+import logging
 import zoneinfo
 from decimal import Decimal, InvalidOperation
 
@@ -15,6 +16,8 @@ from django.conf import settings
 
 from core.models import OrdenPagoPaypal
 from core.services import correo, tokens
+
+logger = logging.getLogger(__name__)
 
 
 # En minuscula, que es como se escriben en espanol. El filtro `date` de Django
@@ -118,15 +121,21 @@ def enviar_comprobante(orden):
     en quien llama, que ya distingue el cobro real de la repeticion; esta cubre
     el caso de que alguien anada mas adelante otro camino que olvide mirarlo.
     """
-    if correo.ya_se_envio(COMPROBANTE_PAGO.entidad, orden.referencia_interna):
-        return None
+    try:
+        if correo.ya_se_envio(COMPROBANTE_PAGO.entidad, orden.referencia_interna):
+            return None
 
-    return correo.enviar(
-        COMPROBANTE_PAGO,
-        orden.comprador.email,
-        contexto_comprobante(orden),
-        entidad_id=orden.referencia_interna,
-    )
+        return correo.enviar(
+            COMPROBANTE_PAGO,
+            orden.comprador.email,
+            contexto_comprobante(orden),
+            entidad_id=orden.referencia_interna,
+        )
+    except Exception:
+        # El pago ya se confirmó. Incluye fallos de consulta y escritura del
+        # registro de correo; el log permite conciliar por referencia.
+        logger.exception("No se pudo emitir el comprobante de %s", orden.referencia_interna)
+        return None
 
 
 def enviar_recuperacion(usuario, token):

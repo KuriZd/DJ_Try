@@ -1,4 +1,4 @@
--- AISER / AMIS - Esquema inicial
+-- AISER - Esquema inicial
 -- Motor: PostgreSQL 15+
 -- Ejecutar primero este archivo y después database/seed.sql.
 

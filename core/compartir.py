@@ -56,7 +56,7 @@ def compartir_publicacion(request, pk):
     )
     destino = f'{settings.FRONTEND_BASE_URL}/actualiza/publicacion/{publicacion.pk}'
     respuesta = render(request, 'compartir/publicacion.html', {
-        'titulo': f'{publicacion.autor.nombre_completo} en Actualiza · AMIS',
+        'titulo': f'{publicacion.autor.nombre_completo} en Actualiza · AISER',
         'descripcion': resumen(publicacion.cuerpo) or 'Publicación con fotos o video en Actualiza.',
         'imagen': imagen_de(publicacion),
         'destino': destino,
