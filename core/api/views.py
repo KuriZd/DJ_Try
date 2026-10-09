@@ -1088,8 +1088,10 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
 
         try:
             postulacion = retirar_postulacion(postulacion, request.user)
-        except PostulacionNoRetirable as error:
-            raise ValidationError({"estado": str(error)})
+        except PostulacionNoRetirable:
+            raise ValidationError(
+                {"estado": "La postulación no se puede retirar en su estado actual."}
+            )
 
         salida = PostulacionSerializer(
             postulacion, context=self.get_serializer_context()
