@@ -27,6 +27,7 @@ DATABASE_SQL_DIR = BASE_DIR / 'database'
 # prioridad y el archivo permanece fuera de Git mediante `.env.*`.
 if os.getenv('DJANGO_SETTINGS_MODULE') != 'config.production':
     load_dotenv(BASE_DIR / '.env.paypal', override=False)
+    load_dotenv(BASE_DIR / '.env.azure', override=False)
 # Configuracion local general (BD, clave Django y S3). El entorno del proceso
 # y la configuracion PayPal anterior conservan prioridad.
     load_dotenv(BASE_DIR / '.env', override=False)
@@ -174,6 +175,12 @@ STATIC_ROOT = Path(os.getenv('STATIC_ROOT', BASE_DIR / 'staticfiles'))
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
 AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
 AWS_S3_SIGNATURE_VERSION = 's3v4'
+MEDIA_STORAGE_PROVIDER = os.getenv('MEDIA_STORAGE_PROVIDER', 's3').strip().lower()
+if MEDIA_STORAGE_PROVIDER not in ('s3', 'azure'):
+    raise RuntimeError('MEDIA_STORAGE_PROVIDER debe ser s3 o azure.')
+AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME', '')
+AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY', '')
+AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'amis-media')
 VIDEO_UPLOAD_URL_TTL = 600
 VIDEO_PLAYBACK_URL_TTL = 3600
 VIDEO_MAX_BYTES = int(os.getenv('VIDEO_MAX_BYTES', str(1024 * 1024 * 1024)))
@@ -208,6 +215,17 @@ STORAGES = {
         },
     },
 }
+
+if MEDIA_STORAGE_PROVIDER == 'azure':
+    STORAGES['videos'] = {
+        'BACKEND': 'storages.backends.azure_storage.AzureStorage',
+        'OPTIONS': {
+            'account_name': AZURE_ACCOUNT_NAME, 'account_key': AZURE_ACCOUNT_KEY,
+            'azure_container': AZURE_CONTAINER,
+            'expiration_secs': VIDEO_PLAYBACK_URL_TTL,
+            'overwrite_files': False,
+        },
+    }
 
 # Los reportes psicometricos son documentos privados. MEDIA_ROOT se usa como
 # almacenamiento local durante esta etapa, pero no se publica mediante urls.py.
@@ -354,6 +372,7 @@ EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
+EMAIL_USE_SSL = env_bool('EMAIL_USE_SSL', False)
 
 # Corto a proposito. El envio ocurre dentro de la peticion, asi que un SMTP
 # que no responde retrasaria un alta o un cobro tanto como tarde este numero.
