@@ -70,8 +70,11 @@ def confirmar_verificacion(request):
         usuario = tokens_service.canjear(
             serializer.validated_data["token"], PropositoToken.VERIFICACION,
         )
-    except tokens_service.TokenInvalido as error:
-        return Response({"token": [str(error)]}, status=HTTP_400_BAD_REQUEST)
+    except tokens_service.TokenInvalido:
+        return Response(
+            {"token": ["El enlace no es valido, ya se uso o caduco."]},
+            status=HTTP_400_BAD_REQUEST,
+        )
 
     if usuario.email_verificado_en is None:
         usuario.email_verificado_en = timezone.now()
