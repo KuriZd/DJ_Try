@@ -17,7 +17,9 @@ from core.models import (
     Aspirante,
     CompraPaquetePsicometrico,
     Empresa,
+    EventoPostulacion,
     EstadoExpediente,
+    EstadoPostulacion,
     EstadoReportePsicometrico,
     EstadoUsuario,
     EstadoVacante,
@@ -35,6 +37,7 @@ from core.models import (
     Vacante,
 )
 from core.services import tokens as tokens_service
+from core.services.postulaciones import registrar_evento
 
 
 def verify_password(password, encoded_password):
@@ -255,7 +258,55 @@ class PostulacionCrearSerializer(serializers.ModelSerializer):
         validated_data["registrada_en"] = ahora
         validated_data["ultima_actividad_en"] = ahora
 
-        return super().create(validated_data)
+        postulacion = super().create(validated_data)
+
+        # Primer paso del historial: sin él, la línea de tiempo de una
+        # postulación recién enviada saldría vacía.
+        registrar_evento(
+            postulacion, usuario=self.context["request"].user, ocurrido_en=ahora
+        )
+
+        return postulacion
+
+
+class PostulacionAvanceSerializer(serializers.Serializer):
+    """
+    Movimiento del proceso de selección: `PATCH /api/postulaciones/{id}/`.
+
+    Sólo estos tres campos. Lo que el aspirante declaró (experiencia,
+    expectativas) es suyo y no lo corrige el reclutador, y la vacante o el
+    aspirante de una postulación no cambian nunca.
+    """
+
+    estado = serializers.ChoiceField(
+        choices=EstadoPostulacion.choices, required=False
+    )
+    etapa = serializers.CharField(max_length=120, required=False)
+    progreso = serializers.IntegerField(
+        min_value=0, max_value=100, required=False
+    )
+
+    def validate(self, attrs):
+        # La etapa en blanco no llega aquí: CharField recorta los espacios y
+        # rechaza la cadena vacía por su cuenta.
+        if not attrs:
+            raise serializers.ValidationError(
+                "Indica el estado, la etapa o el progreso a actualizar."
+            )
+        return attrs
+
+
+class EventoPostulacionSerializer(serializers.ModelSerializer):
+    """
+    Un paso del historial tal como lo ve el aspirante.
+
+    `registrado_por` se queda fuera: quién del equipo movió el proceso es dato
+    interno, y al aspirante le basta saber qué pasó y cuándo.
+    """
+
+    class Meta:
+        model = EventoPostulacion
+        fields = ("id", "estado", "etapa", "progreso", "ocurrido_en")
 
 
 class VacantePublicaSerializer(serializers.ModelSerializer):
@@ -1174,6 +1225,7 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
         max_length=255, required=False, allow_blank=True
     )
     escalas = EscalasField(required=False)
+    desbloqueado = serializers.SerializerMethodField()
 
     class Meta:
         model = ReportePsicometrico
@@ -1200,6 +1252,7 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
             "paginas",
             "notas",
             "disponible_para_compra",
+            "desbloqueado",
             "creado_en",
             "actualizado_en",
         )
@@ -1223,6 +1276,21 @@ class ReportePsicometricoSerializer(serializers.ModelSerializer):
 
     def _es_administrador(self):
         return PERMISO_ADMIN_REPORTES in self._permisos()
+
+    def get_desbloqueado(self, reporte):
+        # El listado comparte el contexto entre filas: los permisos se
+        # consultan una vez y no una por reporte.
+        if "es_admin_reportes" not in self.context:
+            self.context["es_admin_reportes"] = self._es_administrador()
+        return self.context["es_admin_reportes"] or not reporte.requiere_pago
+
+    def to_representation(self, reporte):
+        datos = super().to_representation(reporte)
+        # Lo que se compra: sin pagar, el expediente dice que el reporte
+        # existe y cuánto cuesta, pero no qué resultó.
+        if not datos["desbloqueado"]:
+            datos.update(puntaje=None, nivel=None, escalas=[])
+        return datos
 
     def _aspirante_del_usuario(self):
         aspirante = Aspirante.objects.filter(
