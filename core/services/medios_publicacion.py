@@ -80,6 +80,8 @@ def url_de_subida(clave, content_type):
     otro, y `If-None-Match` impide pisar un archivo ya subido."""
     cliente, bucket = s3_video_storage()
     headers = {'Content-Type': content_type, 'If-None-Match': '*'}
+    if settings.MEDIA_STORAGE_PROVIDER == 'azure':
+        headers['x-ms-blob-type'] = 'BlockBlob'
     url = cliente.generate_presigned_url(
         'put_object',
         Params={'Bucket': bucket, 'Key': clave, 'ContentType': content_type, 'IfNoneMatch': '*'},
@@ -153,7 +155,10 @@ def aun_no_existe(error):
     responde 403. Como sí tiene `s3:GetObject` sobre `publicaciones/*`, un 403
     ahí significa que la carga todavía no llega.
     """
-    return error.response.get('Error', {}).get('Code') in ('403', '404', 'NoSuchKey', 'NotFound')
+    codigos = ('404', 'NoSuchKey', 'NotFound')
+    if settings.MEDIA_STORAGE_PROVIDER == 's3':
+        codigos += ('403',)
+    return error.response.get('Error', {}).get('Code') in codigos
 
 
 def es_valido(adjunto, tamano, content_type, inicio):
