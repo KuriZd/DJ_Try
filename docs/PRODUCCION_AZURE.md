@@ -1,8 +1,9 @@
 # Primera versión en Azure
 
 Destino propuesto: Azure App Service **Linux**, Python 3.12, PostgreSQL Flexible
-Server y almacenamiento persistente para PDFs privados. S3 permanece como
-almacenamiento de videos y fotos. Falta confirmar los recursos y dominios reales.
+Server y almacenamiento persistente para PDFs privados. Videos, fotos y portadas
+admiten Azure Blob o S3 mediante `MEDIA_STORAGE_PROVIDER`. La cuenta de Blob
+para la migración es `amisstorageb1`, contenedor privado `amis-media`.
 
 Como aún no existen recursos, se preparó una [plantilla Bicep de staging](../infra/azure/README.md)
 con red y PostgreSQL privados. Los tamaños quedan como parámetros para revisar costos.
@@ -25,7 +26,10 @@ bucket/prefijos y correo de staging y producción. No subir archivos locales.
 | `POSTGRES_SSLMODE` | `verify-full` por defecto; requiere CA de confianza |
 | `POSTGRES_SSLROOTCERT` | Ruta al archivo de CA mantenido según Azure |
 | `PRIVATE_MEDIA_ROOT` | `/home/djtry/private-media` o montaje persistente equivalente |
-| `AWS_STORAGE_BUCKET_NAME`, `AWS_S3_REGION_NAME` | Bucket privado y región real |
+| `MEDIA_STORAGE_PROVIDER` | `azure` para nuevas cargas; `s3` para usar el origen anterior |
+| `AZURE_ACCOUNT_NAME`, `AZURE_CONTAINER` | `amisstorageb1`, `amis-media` |
+| `AZURE_ACCOUNT_KEY` | Secreto de Azure; requerido cuando el proveedor es `azure` |
+| `AWS_STORAGE_BUCKET_NAME`, `AWS_S3_REGION_NAME` | Origen de migración o proveedor `s3` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Si se usan credenciales AWS; guardar en Key Vault, limitar IAM y rotar |
 | `FRONTEND_BASE_URL` | URL HTTPS del frontend |
 | `PAYPAL_MODE` | `sandbox` en staging, `live` al habilitar cobros reales |
