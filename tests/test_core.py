@@ -13,6 +13,7 @@ from core.models import (
     Aspirante,
     Empresa,
     EstadoPostulacion,
+    EventoPostulacion,
     EstadoUsuario,
     EstadoVacante,
     ModalidadVacante,
@@ -517,7 +518,7 @@ class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
         )
         self.assertEqual(
             cliente.patch(detalle, {"estado": "contratado"}, format="json").status_code,
-            405,
+            403,
         )
 
     def test_aspirante_solo_ve_las_suyas(self):
@@ -601,10 +602,10 @@ class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
 
     # --- Escrituras permitidas y prohibidas -------------------------------
 
-    def test_una_postulacion_existente_no_se_edita_ni_se_borra(self):
+    def test_una_postulacion_existente_no_se_reemplaza_ni_se_borra(self):
         """
-        El alta se abrió para la bolsa de trabajo, pero mover el proceso —o
-        deshacerlo— sigue sin tener endpoint: eso se hace por fuera del API.
+        El proceso se mueve con PATCH (ver PostulacionHistorialTest), pero
+        reemplazarla entera o borrarla —y con ella su historial— no existe.
         """
         cliente = self.cliente_de(self.administrador)
         detalle = reverse(
@@ -612,7 +613,7 @@ class PostulacionAccesoTest(UsuariosDePruebaMixin, TestCase):
         )
 
         self.assertEqual(
-            cliente.patch(detalle, {"estado": "contratado"}, format="json").status_code,
+            cliente.put(detalle, {"estado": "contratado"}, format="json").status_code,
             405,
         )
         self.assertEqual(cliente.delete(detalle).status_code, 405)
@@ -778,6 +779,17 @@ class PostulacionAltaTest(UsuariosDePruebaMixin, TestCase):
         self.assertEqual(postulacion.estado, EstadoPostulacion.NUEVO)
         self.assertEqual(postulacion.etapa, "Postulación recibida")
         self.assertEqual(postulacion.progreso, 0)
+
+    def test_el_alta_abre_el_historial(self):
+        respuesta = self.postularse()
+
+        eventos = list(
+            EventoPostulacion.objects.filter(postulacion_id=respuesta.data["id"])
+        )
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0].estado, EstadoPostulacion.NUEVO)
+        self.assertEqual(eventos[0].etapa, "Postulación recibida")
+        self.assertEqual(eventos[0].registrado_por_id, self.usuario_aspirante.id)
 
     def test_responde_con_la_forma_que_usa_el_listado(self):
         respuesta = self.postularse()
