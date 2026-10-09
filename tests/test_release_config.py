@@ -45,6 +45,16 @@ class ProductionConfigTests(TestCase):
         )
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
 
+    def test_azure_does_not_require_aws_bucket_but_requires_azure_credentials(self):
+        config = {'MEDIA_STORAGE_PROVIDER': 'azure', 'AWS_STORAGE_BUCKET_NAME': '',
+                  'AZURE_ACCOUNT_NAME': 'probe', 'AZURE_ACCOUNT_KEY': 'probe',
+                  'AZURE_CONTAINER': 'private-media'}
+        result = self.run_probe('from config.production import DEBUG', **config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config['AZURE_ACCOUNT_KEY'] = ''
+        result = self.run_probe('from config.production import DEBUG', **config)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_debug_false_proxy_opt_in_and_database_tls(self):
         codigo = (
             "import json; from django.conf import settings as s; "
