@@ -205,3 +205,107 @@ class PostulacionHistorialTest(UsuariosDePruebaMixin, TestCase):
         self.assertFalse(
             EventoPostulacion.objects.filter(postulacion_id=postulacion_id).exists()
         )
+
+
+class PostulacionRetiroTest(UsuariosDePruebaMixin, TestCase):
+    """El aspirante cancela su postulación: `POST /api/postulaciones/{id}/retirar/`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        ahora = timezone.now()
+
+        cls.vacante = Vacante.objects.create(
+            titulo="Consultor SAP Customer Checkout",
+            modalidad=ModalidadVacante.HIBRIDO,
+            creado_en=ahora,
+            actualizado_en=ahora,
+        )
+        cls.usuario_aspirante, cls.aspirante = cls._crear_aspirante(
+            "ana@ene8.com.mx", "TEST-RET-001", "Ana Gómez", "aspirante", ahora
+        )
+        cls.usuario_otro, _ = cls._crear_aspirante(
+            "luis@ene8.com.mx", "TEST-RET-002", "Luis Pérez", "aspirante", ahora
+        )
+        cls.reclutador = cls._crear_usuario(
+            "reclutador@ene8.com.mx", "Rita Ruiz", "reclutador", ahora
+        )
+
+    def setUp(self):
+        ahora = timezone.now()
+        self.postulacion = Postulacion.objects.create(
+            aspirante=self.aspirante,
+            vacante=self.vacante,
+            estado=EstadoPostulacion.REVISION,
+            etapa="Entrevista técnica",
+            progreso=40,
+            registrada_en=ahora,
+            ultima_actividad_en=ahora,
+        )
+
+    def retirar(self, usuario=None):
+        return self.cliente_de(usuario or self.usuario_aspirante).post(
+            reverse("api:postulacion-retirar", args=[self.postulacion.id])
+        )
+
+    def test_el_aspirante_retira_su_postulacion(self):
+        respuesta = self.retirar()
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data["estado"], "retirada")
+
+        self.postulacion.refresh_from_db()
+        self.assertEqual(self.postulacion.estado, EstadoPostulacion.RETIRADA)
+        # El avance se conserva: dice hasta dónde llegó el proceso.
+        self.assertEqual(self.postulacion.progreso, 40)
+
+    def test_el_retiro_queda_en_el_historial(self):
+        self.retirar()
+
+        ultimo = self.postulacion.eventos.last()
+        self.assertEqual(ultimo.estado, EstadoPostulacion.RETIRADA)
+        self.assertEqual(ultimo.registrado_por_id, self.usuario_aspirante.id)
+
+    def test_no_se_retira_dos_veces(self):
+        self.retirar()
+
+        respuesta = self.retirar()
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(self.postulacion.eventos.count(), 1)
+
+    def test_no_se_retira_un_proceso_terminado(self):
+        for final in (EstadoPostulacion.RECHAZADO, EstadoPostulacion.CONTRATADO):
+            with self.subTest(estado=final):
+                Postulacion.objects.filter(pk=self.postulacion.pk).update(estado=final)
+                self.assertEqual(self.retirar().status_code, 400)
+
+    def test_otro_aspirante_no_la_encuentra(self):
+        self.assertEqual(self.retirar(self.usuario_otro).status_code, 404)
+
+    def test_el_reclutador_no_retira_por_el_aspirante(self):
+        """Él sí la encuentra (consultar-todas), pero no es su decisión."""
+        self.assertEqual(self.retirar(self.reclutador).status_code, 403)
+        self.postulacion.refresh_from_db()
+        self.assertEqual(self.postulacion.estado, EstadoPostulacion.REVISION)
+
+    def test_el_reclutador_no_mueve_una_retirada(self):
+        self.retirar()
+
+        respuesta = self.cliente_de(self.reclutador).patch(
+            reverse("api:postulacion-detail", args=[self.postulacion.id]),
+            {"estado": "revision"},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.postulacion.refresh_from_db()
+        self.assertEqual(self.postulacion.estado, EstadoPostulacion.RETIRADA)
+
+    def test_el_reclutador_no_asigna_retirada(self):
+        respuesta = self.cliente_de(self.reclutador).patch(
+            reverse("api:postulacion-detail", args=[self.postulacion.id]),
+            {"estado": "retirada"},
+            format="json",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
