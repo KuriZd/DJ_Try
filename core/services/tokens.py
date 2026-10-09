@@ -24,7 +24,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import PropositoToken, TokenRecuperacion
+from core.models import PropositoToken, TokenRecuperacion, Usuario
 
 
 # 32 bytes en base64url. Mas que suficiente contra fuerza bruta y todavia
@@ -55,6 +55,17 @@ def _vigencia(proposito):
     return timezone.timedelta(hours=horas)
 
 
+def invalidar(usuario, proposito):
+    """Gasta los tokens vivos de ese proposito sin emitir otro.
+
+    Hace falta fuera de `emitir`: al cambiar el correo, un enlace de
+    verificacion mandado a la direccion vieja no debe verificar la nueva.
+    """
+    TokenRecuperacion.objects.filter(
+        usuario=usuario, proposito=proposito, usado_en__isnull=True
+    ).update(usado_en=timezone.now())
+
+
 @transaction.atomic
 def emitir(usuario, proposito):
     """Emite un token y devuelve su valor legible, que no vuelve a existir.
@@ -63,11 +74,11 @@ def emitir(usuario, proposito):
     nuevo. Es lo que hace que el indice unico parcial de la tabla no estorbe, y
     de paso lo que convierte "reenviar" en algo seguro.
     """
+    # Bloquear la cuenta funciona incluso cuando no hay tokens anteriores.
+    # Emision y canje toman primero este mismo bloqueo.
+    Usuario.objects.select_for_update().get(pk=usuario.pk)
     ahora = timezone.now()
-
-    TokenRecuperacion.objects.filter(
-        usuario=usuario, proposito=proposito, usado_en__isnull=True
-    ).update(usado_en=ahora)
+    invalidar(usuario, proposito)
 
     token = secrets.token_urlsafe(BYTES_TOKEN)
     TokenRecuperacion.objects.create(
@@ -90,13 +101,20 @@ def canjear(token, proposito):
     peticiones con el mismo enlace —un doble clic, un precargador de enlaces
     del cliente de correo— no pueden canjearlo las dos.
     """
-    if not token:
+    if not isinstance(token, str) or not token:
         raise TokenInvalido("El enlace no es valido.")
 
+    token_hash = _hash(token)
+    usuario_id = TokenRecuperacion.objects.filter(
+        token_hash=token_hash, proposito=proposito
+    ).values_list('usuario_id', flat=True).first()
+    if usuario_id is None:
+        raise TokenInvalido("El enlace no es valido o ya se uso.")
+    Usuario.objects.select_for_update().get(pk=usuario_id)
     fila = (
-        TokenRecuperacion.objects.select_for_update()
+        TokenRecuperacion.objects.select_for_update(of=('self',))
         .select_related("usuario")
-        .filter(token_hash=_hash(token), proposito=proposito)
+        .filter(token_hash=token_hash, proposito=proposito)
         .first()
     )
 

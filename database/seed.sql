@@ -70,15 +70,15 @@ SELECT r.id, p.id FROM roles r CROSS JOIN permisos p
 WHERE r.clave = 'empresa';
 
 -- Usuario administrador de prueba.
--- Credenciales locales: kurizd@djtry.local / 0330
--- La contraseña se almacena como PBKDF2-SHA256, nunca en texto plano.
+-- Acceso deshabilitado: aprovisionar una cuenta con crear_administrador.
+-- Las cuentas de demostración no tienen una contraseña utilizable.
 INSERT INTO usuarios (
   id, nombre_completo, email, password_hash, estado, email_verificado_en
 ) VALUES (
   '7a15fc4f-d972-48f7-b3d4-4d5f1b877dab',
   'kurizd',
   'kurizd@djtry.local',
-  'pbkdf2_sha256$600000$ELwd6GWDUmPQobJklIVC0c$K+o8b+nDTCjhXq3jUFWm7Yf+0KZSC/SwcX9UCsbX15k=',
+  '!demo-disabled',
   'activo',
   now()
 );
@@ -88,12 +88,12 @@ SELECT '7a15fc4f-d972-48f7-b3d4-4d5f1b877dab', id
 FROM roles
 WHERE clave = 'administrador';
 
--- Usuarios AMIS de desarrollo. Contraseña inicial: Amis2026!
+-- Usuarios AMIS de desarrollo sin contraseña utilizable.
 INSERT INTO usuarios (
   id, nombre_completo, email, password_hash, estado, email_verificado_en
 ) VALUES
-  ('6dc07f5a-358c-4bd4-9f58-40fe36604393', 'Administrador AMIS', 'admin@amis.org', 'pbkdf2_sha256$1500000$Zrb4ZOEiEMlB58WPN5N8sA$EaQp2gpEC2kqG5/y4WSqIsHfPwgKk8DiJCLBbVoMlcA=', 'activo', now()),
-  ('a5434e6e-8073-4f02-aabf-a0e92f79d4ae', 'Aspirante AMIS', 'aspirante@amis.org', 'pbkdf2_sha256$1500000$MdLUbAiuonT4HXi5AO4TJ5$vyBvnOYQCyvzlnoPY7EWkQe6puZDlL0z15GynulgBjM=', 'activo', now());
+  ('6dc07f5a-358c-4bd4-9f58-40fe36604393', 'Administrador AMIS', 'admin@amis.org', '!demo-disabled', 'activo', now()),
+  ('a5434e6e-8073-4f02-aabf-a0e92f79d4ae', 'Aspirante AMIS', 'aspirante@amis.org', '!demo-disabled', 'activo', now());
 
 INSERT INTO usuarios_roles (usuario_id, rol_id)
 SELECT u.id, r.id
@@ -104,15 +104,15 @@ JOIN roles r ON r.clave = CASE lower(u.email)
 END
 WHERE lower(u.email) IN ('admin@amis.org', 'aspirante@amis.org');
 
--- Usuarios de demostración, uno por rol. Contraseña para entorno local: 1234.
+-- Usuarios de demostración, uno por rol, sin contraseña utilizable.
 INSERT INTO usuarios (
   id, nombre_completo, email, password_hash, estado, email_verificado_en
 ) VALUES
-  ('b0fd0e98-6ed3-418c-8f0a-872eabc240a0', 'KuriZd Administrador', 'KuriZd@administrador.com', 'pbkdf2_sha256$600000$p6BtgfsiXTUC$q93qU84TWURm0l59XsRPVRhV6x0XcDTlMnPGt861wnY=', 'activo', now()),
-  ('68af39e3-ebf9-49a2-90d7-1f925180909f', 'KuriZd Reclutador', 'KuriZd@reclutador.com', 'pbkdf2_sha256$600000$QpfkXs9oOpp2$XIbPiM6zQv7DQDZVJYGw9aLovhOduwwz/mIh9HgF+HA=', 'activo', now()),
-  ('3910bf18-4dce-4d9b-930a-70a58f8e5008', 'KuriZd Empresa', 'KuriZd@empresa.com', 'pbkdf2_sha256$600000$JJKomP0E9S6u$XGFPsbnHOxQvkg9V3/QqK7NE0JBf++d455Znv+6bbRc=', 'activo', now()),
-  ('4f744939-bb96-43ec-8d22-79c09d9672a4', 'KuriZd Consulta', 'KuriZd@consulta.com', 'pbkdf2_sha256$600000$6wkG3dhQoos2$UkfVpMM0Fe0EzrOJOW8/jTL/HkudVJgJa3LF4MxLTUE=', 'activo', now()),
-  ('a206bb8a-eb96-4d23-9807-e234c030ba84', 'KuriZd Aspirante', 'KuriZd@aspirante.com', 'pbkdf2_sha256$600000$kdbmcYOAfWni$ej6FDIzlXAq2KYrFv4P8OpS5bQcrkb0p9NkYMRZIBEk=', 'activo', now());
+  ('b0fd0e98-6ed3-418c-8f0a-872eabc240a0', 'KuriZd Administrador', 'KuriZd@administrador.com', '!demo-disabled', 'activo', now()),
+  ('68af39e3-ebf9-49a2-90d7-1f925180909f', 'KuriZd Reclutador', 'KuriZd@reclutador.com', '!demo-disabled', 'activo', now()),
+  ('3910bf18-4dce-4d9b-930a-70a58f8e5008', 'KuriZd Empresa', 'KuriZd@empresa.com', '!demo-disabled', 'activo', now()),
+  ('4f744939-bb96-43ec-8d22-79c09d9672a4', 'KuriZd Consulta', 'KuriZd@consulta.com', '!demo-disabled', 'activo', now()),
+  ('a206bb8a-eb96-4d23-9807-e234c030ba84', 'KuriZd Aspirante', 'KuriZd@aspirante.com', '!demo-disabled', 'activo', now());
 
 INSERT INTO usuarios_roles (usuario_id, rol_id)
 SELECT u.id, r.id

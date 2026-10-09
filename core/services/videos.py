@@ -4,6 +4,10 @@ from django.core.files.storage import storages
 
 
 def s3_video_storage():
+    # Compatibility name: DB keys and callers also work with Azure.
+    if settings.MEDIA_STORAGE_PROVIDER == 'azure':
+        from core.services.azure_media import AzureMediaClient
+        return AzureMediaClient(), settings.AZURE_CONTAINER
     if not settings.AWS_STORAGE_BUCKET_NAME:
         raise ImproperlyConfigured('Falta AWS_STORAGE_BUCKET_NAME.')
     storage = storages['videos']
@@ -13,6 +17,8 @@ def s3_video_storage():
 def upload_url(key):
     client, bucket = s3_video_storage()
     headers = {'Content-Type': 'video/mp4', 'If-None-Match': '*'}
+    if settings.MEDIA_STORAGE_PROVIDER == 'azure':
+        headers['x-ms-blob-type'] = 'BlockBlob'
     url = client.generate_presigned_url(
         'put_object',
         Params={'Bucket': bucket, 'Key': key, 'ContentType': 'video/mp4', 'IfNoneMatch': '*'},

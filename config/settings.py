@@ -25,10 +25,12 @@ DATABASE_SQL_DIR = BASE_DIR / 'database'
 
 # Configuración local de PayPal. Las variables definidas por el sistema tienen
 # prioridad y el archivo permanece fuera de Git mediante `.env.*`.
-load_dotenv(BASE_DIR / '.env.paypal', override=False)
+if os.getenv('DJANGO_SETTINGS_MODULE') != 'config.production':
+    load_dotenv(BASE_DIR / '.env.paypal', override=False)
+    load_dotenv(BASE_DIR / '.env.azure', override=False)
 # Configuracion local general (BD, clave Django y S3). El entorno del proceso
 # y la configuracion PayPal anterior conservan prioridad.
-load_dotenv(BASE_DIR / '.env', override=False)
+    load_dotenv(BASE_DIR / '.env', override=False)
 
 
 # Quick-start development settings - unsuitable for production
@@ -43,7 +45,7 @@ def env_bool(nombre, default=False):
 # En una demo local se genera una clave efimera si aun no se configuro una.
 # Reiniciar el servidor invalida sus JWT, lo cual hace visible la omision sin
 # conservar una clave publica en Git. Fuera de DEBUG la clave es obligatoria.
-DEBUG = env_bool("DJANGO_DEBUG", True)
+DEBUG = env_bool("DJANGO_DEBUG", os.getenv('DJANGO_SETTINGS_MODULE') != 'config.production')
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
 if not SECRET_KEY:
     if not DEBUG:
@@ -167,14 +169,32 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = Path(os.getenv('STATIC_ROOT', BASE_DIR / 'staticfiles'))
 
 # Alias separado: los reportes privados existentes conservan su storage local.
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
 AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
 AWS_S3_SIGNATURE_VERSION = 's3v4'
+MEDIA_STORAGE_PROVIDER = os.getenv('MEDIA_STORAGE_PROVIDER', 's3').strip().lower()
+if MEDIA_STORAGE_PROVIDER not in ('s3', 'azure'):
+    raise RuntimeError('MEDIA_STORAGE_PROVIDER debe ser s3 o azure.')
+AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME', '')
+AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY', '')
+AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'amis-media')
 VIDEO_UPLOAD_URL_TTL = 600
 VIDEO_PLAYBACK_URL_TTL = 3600
 VIDEO_MAX_BYTES = int(os.getenv('VIDEO_MAX_BYTES', str(1024 * 1024 * 1024)))
+# Fotos y videos del muro de Actualiza: mismo bucket, prefijo `publicaciones/`.
+# La politica IAM de la app tiene que permitir Put/Get/Delete en ese prefijo.
+PUBLICACION_MAX_IMAGENES = int(os.getenv('PUBLICACION_MAX_IMAGENES', '4'))
+PUBLICACION_IMAGEN_MAX_BYTES = int(os.getenv('PUBLICACION_IMAGEN_MAX_BYTES', str(10 * 1024 * 1024)))
+IMAGEN_MAX_PIXELES = int(os.getenv('IMAGEN_MAX_PIXELES', '20000000'))
+PUBLICACION_VIDEO_MAX_BYTES = int(os.getenv('PUBLICACION_VIDEO_MAX_BYTES', str(200 * 1024 * 1024)))
+# Cuanto dura la URL firmada con la que se ve una foto o un video del muro.
+PUBLICACION_MEDIA_URL_TTL = int(os.getenv('PUBLICACION_MEDIA_URL_TTL', str(6 * 60 * 60)))
+# Caratula de un curso: mismo bucket, prefijo `cursos/{id}/`. La politica IAM
+# tiene que permitir Put/Get/Delete tambien ahi.
+CURSO_PORTADA_MAX_BYTES = int(os.getenv('CURSO_PORTADA_MAX_BYTES', str(5 * 1024 * 1024)))
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
@@ -195,6 +215,17 @@ STORAGES = {
         },
     },
 }
+
+if MEDIA_STORAGE_PROVIDER == 'azure':
+    STORAGES['videos'] = {
+        'BACKEND': 'storages.backends.azure_storage.AzureStorage',
+        'OPTIONS': {
+            'account_name': AZURE_ACCOUNT_NAME, 'account_key': AZURE_ACCOUNT_KEY,
+            'azure_container': AZURE_CONTAINER,
+            'expiration_secs': VIDEO_PLAYBACK_URL_TTL,
+            'overwrite_files': False,
+        },
+    }
 
 # Los reportes psicometricos son documentos privados. MEDIA_ROOT se usa como
 # almacenamiento local durante esta etapa, pero no se publica mediante urls.py.
@@ -232,7 +263,28 @@ PAYPAL_ORDER_TTL_HOURS = int(os.getenv('PAYPAL_ORDER_TTL_HOURS', '3'))
 
 
 # Django REST Framework
+# Los limites de frecuencia (DEFAULT_THROTTLE_RATES) cuentan en esta cache.
+# La de memoria que Django usa por omision es de cada proceso: con varios
+# workers, cada uno llevaria su propia cuenta y el limite real se
+# multiplicaria. Por eso la cuenta vive en Postgres, compartida, en una tabla
+# que crea la migracion 0036. Con REDIS_URL se usa Redis, que aguanta mas
+# trafico (requiere el paquete `redis`).
+REDIS_URL = os.getenv('REDIS_URL', '')
+if REDIS_URL:
+    CACHES = {'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }}
+else:
+    CACHES = {'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'cache_compartida',
+    }}
+
 REST_FRAMEWORK = {
+    # Por defecto se ignoran IPs declaradas por el cliente. Solo configurar
+    # proxies cuando el backend sea privado y estos reescriban la cabecera.
+    'NUM_PROXIES': int(os.getenv('DJANGO_NUM_PROXIES', '0')),
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'core.api.authentication.UsuarioJWTAuthentication',
     ],
@@ -262,6 +314,15 @@ REST_FRAMEWORK = {
         # tiene que aguantar a una oficina entera comprobando certificados
         # y aun asi cortar el sondeo automatizado de codigos.
         'verificar_certificado': os.getenv('THROTTLE_VERIFICAR_CERTIFICADO', '30/minute'),
+        # Cualquier cuenta publica en el muro: el limite es por cuenta y solo
+        # cuenta altas, no ediciones.
+        'publicar': os.getenv('THROTTLE_PUBLICAR', '10/hour'),
+        'comentar': os.getenv('THROTTLE_COMENTAR', '30/hour'),
+        'enviar_verificacion': os.getenv('THROTTLE_ENVIAR_VERIFICACION', '3/hour'),
+        'confirmar_verificacion': os.getenv('THROTTLE_CONFIRMAR_VERIFICACION', '10/hour'),
+        'reportar': os.getenv('THROTTLE_REPORTAR', '20/hour'),
+        'reaccionar': os.getenv('THROTTLE_REACCIONAR', '120/hour'),
+        'subir_adjunto': os.getenv('THROTTLE_SUBIR_ADJUNTO', '40/hour'),
     },
 }
 
@@ -311,12 +372,13 @@ EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
+EMAIL_USE_SSL = env_bool('EMAIL_USE_SSL', False)
 
 # Corto a proposito. El envio ocurre dentro de la peticion, asi que un SMTP
 # que no responde retrasaria un alta o un cobro tanto como tarde este numero.
 EMAIL_TIMEOUT = float(os.getenv('EMAIL_TIMEOUT', '5'))
 
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'AMIS <no-reply@amis.org>')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'AISER <no-reply@aiser.mx>')
 
 # Jaula del entorno de pruebas.
 #

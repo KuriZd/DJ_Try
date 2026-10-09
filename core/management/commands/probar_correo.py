@@ -61,6 +61,7 @@ class Command(BaseCommand):
                 "(puesta)" if settings.EMAIL_HOST_PASSWORD else "(vacia)",
             ),
             ("EMAIL_USE_TLS", settings.EMAIL_USE_TLS),
+            ("EMAIL_USE_SSL", settings.EMAIL_USE_SSL),
             ("EMAIL_TIMEOUT", f"{settings.EMAIL_TIMEOUT}s"),
             ("DEFAULT_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
             ("EMAIL_REDIRIGIR_A", settings.EMAIL_REDIRIGIR_A or "(vacio)"),

@@ -1,3 +1,5 @@
+from botocore.exceptions import ClientError
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
@@ -7,18 +9,25 @@ from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from core.models import Curso, Modulo, Leccion, Inscripcion, ProgresoLeccion, CertificadoCurso, Video
+from core.services import portadas_curso
 from core.services.cursos import recalcular_curso, recalcular_inscripcion
 from .curso_permissions import PuedeGestionarCursos, administra_cursos, gestiona_curso, permisos_cursos
 from .curso_serializers import (
     CursoSerializer, CursoDetalleSerializer, ModuloSerializer, LeccionSerializer,
     InscripcionSerializer, InscribirSerializer, ProgresoSerializer,
     RegistrarProgresoSerializer, CertificadoCursoSerializer, ResultadoProgresoSerializer,
+    PedirPortadaSerializer, ConfirmarPortadaSerializer,
 )
+
+
+class PortadaNoDisponible(APIException):
+    status_code = 503
+    default_detail = 'El almacenamiento de imagenes no esta disponible. Intenta de nuevo.'
 
 
 UUID_REGEX = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
@@ -96,7 +105,7 @@ class CursoViewSet(APIPrivada, viewsets.ModelViewSet):
         qs = Curso.objects.select_related('instructor').prefetch_related('modulos__lecciones')
         if getattr(self, 'swagger_fake_view', False):
             return qs.none()
-        if self.action in ('update', 'partial_update', 'destroy'):
+        if self.action in ('update', 'partial_update', 'destroy', 'portada', 'confirmar_portada'):
             return qs.filter(filtro_gestion(self.request)).distinct()
         return qs.filter(Q(activo=True) | filtro_gestion(self.request)).distinct()
 
@@ -107,8 +116,90 @@ class CursoViewSet(APIPrivada, viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        get_object_or_404(Curso.objects.select_for_update(), slug=kwargs['slug'])
-        return super().destroy(request, *args, **kwargs)
+        curso = get_object_or_404(Curso.objects.select_for_update(), slug=kwargs['slug'])
+        clave = curso.imagen_clave
+        respuesta = super().destroy(request, *args, **kwargs)
+        # La caratula no se queda huerfana en S3. Despues del commit: si el
+        # borrado se revierte, el archivo sigue haciendo falta.
+        transaction.on_commit(lambda: portadas_curso.borrar([clave]))
+        return respuesta
+
+    @swagger_auto_schema(method='post', request_body=PedirPortadaSerializer)
+    @swagger_auto_schema(method='delete', responses={200: CursoSerializer})
+    @action(detail=True, methods=['post', 'delete'], url_path='portada')
+    def portada(self, request, slug=None):
+        """Caratula del curso.
+
+            POST   cursos/{slug}/portada/            { content_type, tamano } -> URL de subida
+            PUT    {upload_url}                      el navegador, directo a S3
+            POST   cursos/{slug}/portada/confirmar/  { clave } comprueba el archivo y la fija
+            DELETE cursos/{slug}/portada/            la quita
+
+        Pedir la subida no cambia el curso: una carga que nunca se confirma
+        no le deja una caratula rota a nadie.
+        """
+        if request.method == 'DELETE':
+            return self._quitar_portada(request)
+
+        curso = self.get_object()
+        datos = PedirPortadaSerializer(data=request.data)
+        datos.is_valid(raise_exception=True)
+        content_type = datos.validated_data['content_type']
+        clave = portadas_curso.clave_nueva(curso, content_type)
+        try:
+            url, headers = portadas_curso.url_de_subida(clave, content_type)
+        except portadas_curso.ERRORES_S3 as error:
+            raise PortadaNoDisponible() from error
+        return Response({
+            'clave': clave, 'upload_url': url, 'method': 'PUT', 'headers': headers,
+            'expires_in': settings.VIDEO_UPLOAD_URL_TTL,
+        }, status=201)
+
+    @swagger_auto_schema(request_body=ConfirmarPortadaSerializer, responses={200: CursoSerializer})
+    @action(detail=True, methods=['post'], url_path='portada/confirmar')
+    def confirmar_portada(self, request, slug=None):
+        datos = ConfirmarPortadaSerializer(data=request.data)
+        datos.is_valid(raise_exception=True)
+        clave = datos.validated_data['clave']
+
+        with transaction.atomic():
+            curso = get_object_or_404(Curso.objects.select_for_update(), pk=self.get_object().pk)
+            content_type = portadas_curso.tipo_de_clave(curso, clave)
+            if content_type is None:
+                raise ValidationError({'clave': 'No es una caratula de este curso.'})
+            try:
+                tamano, guardado, inicio = portadas_curso.inspeccionar(clave)
+            except ClientError as error:
+                if error.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+                    return Response({'detail': 'La imagen todavia no termina de subirse.'}, status=409)
+                raise PortadaNoDisponible() from error
+            except portadas_curso.ERRORES_S3 as error:
+                raise PortadaNoDisponible() from error
+
+            if not portadas_curso.es_valida(content_type, tamano, guardado, inicio):
+                # Lo rechazado no se queda en S3.
+                transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, clave))
+                limite = settings.CURSO_PORTADA_MAX_BYTES // (1024 * 1024)
+                return Response({
+                    'detail': f'El archivo no es una imagen JPG, PNG o WebP valida, o pasa de {limite} MB.',
+                }, status=400)
+
+            anterior = curso.imagen_clave
+            curso.imagen_clave, curso.imagen_tipo, curso.imagen = clave, content_type, ''
+            curso.save(update_fields=['imagen_clave', 'imagen_tipo', 'imagen'])
+            if anterior and anterior != clave:
+                transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, anterior))
+
+        return Response(CursoSerializer(curso, context=self.get_serializer_context()).data)
+
+    def _quitar_portada(self, request):
+        with transaction.atomic():
+            curso = get_object_or_404(Curso.objects.select_for_update(), pk=self.get_object().pk)
+            anterior = curso.imagen_clave
+            curso.imagen_clave, curso.imagen_tipo, curso.imagen = '', '', ''
+            curso.save(update_fields=['imagen_clave', 'imagen_tipo', 'imagen'])
+            transaction.on_commit(lambda: portadas_curso.borrar_si_retirada(curso.pk, anterior))
+        return Response(CursoSerializer(curso, context=self.get_serializer_context()).data)
 
     @swagger_auto_schema(request_body=no_body, responses={200: InscripcionSerializer, 201: InscripcionSerializer})
     @action(detail=True, methods=['post'])

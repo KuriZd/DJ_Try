@@ -1,7 +1,11 @@
+import uuid
+
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 
-from core.models import EstadoUsuario, Usuario
+from core.models import EstadoUsuario, Sesion, Usuario
 
 
 class UsuarioJWTAuthentication(JWTAuthentication):
@@ -14,10 +18,22 @@ class UsuarioJWTAuthentication(JWTAuthentication):
 
         try:
             usuario = Usuario.objects.get(id=user_id, eliminado_en__isnull=True)
-        except (Usuario.DoesNotExist, ValueError, TypeError):
+        except (Usuario.DoesNotExist, ValueError, TypeError, ValidationError):
             raise AuthenticationFailed("Usuario no encontrado.")
 
         if usuario.estado != EstadoUsuario.ACTIVO:
             raise AuthenticationFailed("El usuario no está activo.")
+
+        # Los access tokens heredan el sid del refresh. No se admiten tokens
+        # anteriores sin sesion: no seria posible revocarlos al recuperar acceso.
+        try:
+            session_id = uuid.UUID(str(validated_token.get("sid", "")))
+        except (ValueError, TypeError, AttributeError):
+            raise AuthenticationFailed("La sesión no es válida. Inicia sesión de nuevo.")
+        if not Sesion.objects.filter(
+            id=session_id, usuario=usuario, revocada_en__isnull=True,
+            expira_en__gt=timezone.now(),
+        ).exists():
+            raise AuthenticationFailed("La sesión expiró o fue revocada.")
 
         return usuario

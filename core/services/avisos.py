@@ -8,6 +8,7 @@ Aqui viven tambien los reconstructores que usa `reintentar_correos`: solo los
 correos sin secretos y derivables de la base pueden reintentarse.
 """
 
+import logging
 import zoneinfo
 from decimal import Decimal, InvalidOperation
 
@@ -15,6 +16,8 @@ from django.conf import settings
 
 from core.models import OrdenPagoPaypal
 from core.services import correo, tokens
+
+logger = logging.getLogger(__name__)
 
 
 # En minuscula, que es como se escriben en espanol. El filtro `date` de Django
@@ -46,6 +49,12 @@ def _fecha_larga(momento):
 RECUPERACION = correo.PlantillaCorreo(
     clave="recuperacion",
     asunto="Recupera el acceso a tu cuenta",
+    entidad="usuario",
+)
+
+VERIFICACION = correo.PlantillaCorreo(
+    clave="verificacion",
+    asunto="Confirma tu correo",
     entidad="usuario",
 )
 
@@ -112,15 +121,21 @@ def enviar_comprobante(orden):
     en quien llama, que ya distingue el cobro real de la repeticion; esta cubre
     el caso de que alguien anada mas adelante otro camino que olvide mirarlo.
     """
-    if correo.ya_se_envio(COMPROBANTE_PAGO.entidad, orden.referencia_interna):
-        return None
+    try:
+        if correo.ya_se_envio(COMPROBANTE_PAGO.entidad, orden.referencia_interna):
+            return None
 
-    return correo.enviar(
-        COMPROBANTE_PAGO,
-        orden.comprador.email,
-        contexto_comprobante(orden),
-        entidad_id=orden.referencia_interna,
-    )
+        return correo.enviar(
+            COMPROBANTE_PAGO,
+            orden.comprador.email,
+            contexto_comprobante(orden),
+            entidad_id=orden.referencia_interna,
+        )
+    except Exception:
+        # El pago ya se confirmó. Incluye fallos de consulta y escritura del
+        # registro de correo; el log permite conciliar por referencia.
+        logger.exception("No se pudo emitir el comprobante de %s", orden.referencia_interna)
+        return None
 
 
 def enviar_recuperacion(usuario, token):
@@ -136,6 +151,20 @@ def enviar_recuperacion(usuario, token):
             "nombre": usuario.nombre_completo,
             "enlace": tokens.construir_enlace("/restablecer", token),
             "horas": settings.TOKEN_RECUPERACION_HORAS,
+        },
+        entidad_id=usuario.id,
+    )
+
+
+def enviar_verificacion(usuario, token):
+    """Manda el enlace para confirmar el correo. Nunca lanza."""
+    return correo.enviar(
+        VERIFICACION,
+        usuario.email,
+        {
+            "nombre": usuario.nombre_completo,
+            "enlace": tokens.construir_enlace("/verificar-correo", token),
+            "horas": settings.TOKEN_VERIFICACION_HORAS,
         },
         entidad_id=usuario.id,
     )

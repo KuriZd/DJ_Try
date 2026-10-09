@@ -1,4 +1,4 @@
--- AISER / AMIS - Esquema inicial
+-- AISER - Esquema inicial
 -- Motor: PostgreSQL 15+
 -- Ejecutar primero este archivo y después database/seed.sql.
 
@@ -11,7 +11,7 @@ CREATE TYPE estado_convocatoria AS ENUM ('borrador', 'publicada', 'cerrada', 'ca
 CREATE TYPE estado_vacante AS ENUM ('borrador', 'publicada', 'pausada', 'cerrada', 'cancelada');
 CREATE TYPE modalidad_vacante AS ENUM ('presencial', 'remoto', 'hibrido');
 CREATE TYPE jornada_vacante AS ENUM ('tiempo_completo', 'medio_tiempo', 'estacional');
-CREATE TYPE estado_postulacion AS ENUM ('nuevo', 'revision', 'shortlist', 'rechazado', 'contratado');
+CREATE TYPE estado_postulacion AS ENUM ('nuevo', 'revision', 'shortlist', 'rechazado', 'contratado', 'retirada');
 CREATE TYPE estado_expediente AS ENUM ('activo', 'incompleto', 'suspendido', 'cerrado');
 CREATE TYPE estado_certificado AS ENUM ('en_proceso', 'emitido', 'enviado', 'reenviado', 'cancelado', 'revocado');
 CREATE TYPE tipo_generacion AS ENUM ('automatica', 'manual');

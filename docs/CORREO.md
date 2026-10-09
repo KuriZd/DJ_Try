@@ -39,9 +39,10 @@ la que te registraste**, y compara distinguiendo mayúsculas.
 | `EMAIL_BACKEND` | consola si `DEBUG`, si no smtp | Por dónde sale |
 | `EMAIL_HOST` / `EMAIL_PORT` | `localhost` / `587` | Servidor SMTP |
 | `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` | vacías | Credenciales |
-| `EMAIL_USE_TLS` | `True` | Cifrado |
+| `EMAIL_USE_TLS` | `True` | STARTTLS (habitualmente puerto 587) |
+| `EMAIL_USE_SSL` | `False` | SSL directo (habitualmente puerto 465); requiere `EMAIL_USE_TLS=False` |
 | `EMAIL_TIMEOUT` | `5` | Segundos. Corto a propósito: el envío ocurre dentro de la petición |
-| `DEFAULT_FROM_EMAIL` | `AMIS <no-reply@amis.org>` | Remitente |
+| `DEFAULT_FROM_EMAIL` | `AISER <no-reply@aiser.mx>` | Remitente |
 | `EMAIL_REDIRIGIR_A` | vacía | **Jaula de pruebas**: desvía todo a esa dirección |
 | `EMAIL_MAX_INTENTOS` | `3` | Cuántas veces reintenta el comando |
 | `FRONTEND_BASE_URL` | `http://localhost:5173` | Base de los enlaces del correo |
@@ -164,7 +165,7 @@ imprime `To: (efectivo)` justo para poder compararlo carácter por carácter con
 lo que diga el error.
 
 **El remitente tiene que estar autorizado por el proveedor.** Autenticar con
-Gmail o Resend y decir que escribes desde `no-reply@amis.org` da un `550` o un
+Gmail o Resend y decir que escribes desde `no-reply@aiser.mx` da un `550` o un
 `553`. Mientras no haya dominio verificado, `DEFAULT_FROM_EMAIL` debe ser una
 dirección del proveedor.
 
@@ -182,9 +183,10 @@ una prueba anterior.
 ## 6. Lo que falta
 
 El correo sale hoy desde el dominio de pruebas del proveedor. Para enviarlo
-desde `amis.org` hacen falta tres registros DNS —SPF, DKIM y DMARC— que no
-existen: el dominio no tiene ninguna autenticación de correo. Sin eso, los
-mensajes desde `@amis.org` caerán en spam.
+desde el dominio de AISER (el remitente por defecto supone `aiser.mx`, por
+confirmar) hacen falta tres registros DNS —SPF, DKIM y DMARC— verificados en
+el proveedor. Sin eso, los mensajes desde ese dominio caerán en spam o el
+proveedor los rechazará.
 
-El DNS está alojado en Wix (`ns14.wixdns.net`), no en GoDaddy, aunque el
-correo actual de la asociación salga por ahí.
+Lo que se averiguó del dominio anterior, `amis.org`, ya no aplica: su DNS
+estaba en Wix (`ns14.wixdns.net`) y no tenía autenticación de correo.

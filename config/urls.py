@@ -20,13 +20,14 @@ from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
 from rest_framework import permissions
 
+from core.compartir import compartir_publicacion
+
 
 schema_view = get_schema_view(
     openapi.Info(
         title="DJ Try API",
         default_version="v1",
         description="Documentacion interactiva de la API de DJ Try.",
-        terms_of_service="https://www.AMISITE.com/policies/terms/",
         contact=openapi.Contact(email="KuriZd@Protonmail.com"),
         license=openapi.License(name="BSD License"),
     ),
@@ -37,6 +38,12 @@ schema_view = get_schema_view(
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core.api.urls')),
+    # Fuera de /api/: es una pagina para rastreadores de vista previa, no JSON.
+    path(
+        'compartir/publicacion/<uuid:pk>/',
+        compartir_publicacion,
+        name='compartir-publicacion',
+    ),
     path(
         'api/schema.<str:format>',
         schema_view.without_ui(cache_timeout=0),

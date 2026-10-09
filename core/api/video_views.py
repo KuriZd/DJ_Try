@@ -113,7 +113,7 @@ class VideoViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                 metadata = videos.head_video(rendition.s3_key)
             except ClientError as exc:
                 if exc.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
-                    return Response({'detail': 'La carga aun no existe en S3.'}, status=409)
+                    return Response({'detail': 'La carga aun no existe en el almacenamiento.'}, status=409)
                 raise VideoStorageUnavailable() from exc
             except (BotoCoreError, ImproperlyConfigured) as exc:
                 raise VideoStorageUnavailable() from exc

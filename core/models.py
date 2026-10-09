@@ -44,7 +44,12 @@ class Curso(models.Model):
     resumen = models.CharField(max_length=300, blank=True)
     descripcion = models.TextField(blank=True)
     objetivos = models.JSONField(default=list, blank=True)
+    # URL externa heredada. La caratula nueva vive en S3 (`imagen_clave`) y
+    # se entrega firmada; `imagen` queda solo para los cursos que ya la
+    # traian y deja de escribirse desde el API.
     imagen = models.URLField(max_length=1000, blank=True)
+    imagen_clave = models.CharField(max_length=512, blank=True, default='')
+    imagen_tipo = models.CharField(max_length=50, blank=True, default='')
     instructor = models.ForeignKey('Usuario', models.PROTECT, related_name='cursos_impartidos')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=False)
@@ -180,6 +185,169 @@ class VideoRendition(models.Model):
         constraints = [models.UniqueConstraint(fields=['video', 'profile'], name='unique_video_profile')]
 
 
+class Publicacion(models.Model):
+    """Entrada del muro de `/actualiza`: la escribe cualquier cuenta activa.
+
+    El cuerpo es texto plano. El frontend respeta saltos de linea y enlaza las
+    URLs, pero nunca lo pinta como HTML: asi no hay nada que sanitizar.
+    """
+
+    LIMITE_CUERPO = 3000
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    autor = models.ForeignKey('Usuario', models.PROTECT, related_name='publicaciones')
+    cuerpo = models.TextField()
+    fecha_publicacion = models.DateTimeField(auto_now_add=True, db_index=True)
+    # Nulo mientras no se edite: el muro marca "editada" solo si hubo cambio.
+    fecha_edicion = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ['-fecha_publicacion', '-id']
+
+
+class Reaccion(models.Model):
+    """Un "me gusta": uno por cuenta y publicacion, lo impone la base."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(Publicacion, models.CASCADE, related_name='reacciones')
+    usuario = models.ForeignKey('Usuario', models.CASCADE, related_name='reacciones')
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['publicacion', 'usuario'], name='reaccion_publicacion_usuario_unica',
+        )]
+
+
+class Comentario(models.Model):
+    """Comentario plano, sin respuestas anidadas. Texto plano, como la publicacion."""
+
+    LIMITE_CUERPO = 1250
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(Publicacion, models.CASCADE, related_name='comentarios')
+    autor = models.ForeignKey('Usuario', models.PROTECT, related_name='comentarios')
+    cuerpo = models.TextField()
+    fecha_publicacion = models.DateTimeField(auto_now_add=True)
+    fecha_edicion = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ['fecha_publicacion', 'id']
+        indexes = [models.Index(fields=['publicacion', 'fecha_publicacion'])]
+
+
+class TipoAdjunto(models.TextChoices):
+    IMAGEN = 'imagen', 'Imagen'
+    VIDEO = 'video', 'Video'
+
+
+class EstadoAdjunto(models.TextChoices):
+    PENDIENTE = 'pendiente', 'Pendiente'
+    LISTO = 'listo', 'Listo'
+    RECHAZADO = 'rechazado', 'Rechazado'
+
+
+class AdjuntoPublicacion(models.Model):
+    """Foto o video de una publicacion, guardado en S3 bajo `publicaciones/`.
+
+    Nace antes que la publicacion: el navegador lo sube mientras se escribe, y
+    al publicar se cuelga de ella. Hasta entonces `publicacion` es nulo; los
+    que nunca se publicaron los borra `limpiar_adjuntos`.
+
+    `pendiente` mientras el archivo viaja; `listo` cuando el backend comprobo
+    en S3 que existe, que su tipo es el declarado (tambien por sus primeros
+    bytes) y que cabe. Solo los listos se pueden publicar y se muestran.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    autor = models.ForeignKey('Usuario', models.CASCADE, related_name='adjuntos_publicacion')
+    publicacion = models.ForeignKey(
+        Publicacion, models.CASCADE, null=True, blank=True, related_name='adjuntos',
+    )
+    tipo = models.CharField(max_length=10, choices=TipoAdjunto.choices)
+    content_type = models.CharField(max_length=50)
+    s3_key = models.CharField(max_length=512, unique=True, editable=False)
+    tamano = models.PositiveBigIntegerField(null=True, blank=True)
+    # Texto alternativo de una foto: lo lee el lector de pantalla.
+    descripcion = models.CharField(max_length=300, blank=True)
+    orden = models.PositiveSmallIntegerField(default=0)
+    estado = models.CharField(
+        max_length=10, choices=EstadoAdjunto.choices, default=EstadoAdjunto.PENDIENTE,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['orden', 'creado_en']
+        indexes = [models.Index(fields=['publicacion', 'orden'])]
+
+
+class MotivoReporte(models.TextChoices):
+    SPAM = 'spam', 'Spam o publicidad'
+    ACOSO = 'acoso', 'Acoso u ofensas'
+    SUPLANTACION = 'suplantacion', 'Suplantación de identidad'
+    INAPROPIADO = 'inapropiado', 'Contenido inapropiado'
+    OTRO = 'otro', 'Otro'
+
+
+class EstadoReporte(models.TextChoices):
+    PENDIENTE = 'pendiente', 'Pendiente'
+    ELIMINADO = 'eliminado', 'Contenido eliminado'
+    DESCARTADO = 'descartado', 'Descartado'
+
+
+class Reporte(models.Model):
+    """Aviso de que una publicacion o un comentario no deberia estar en el muro.
+
+    Apunta a uno de los dos. Las llaves quedan en nulo si el contenido se
+    borra, y por eso el reporte guarda su propia copia de lo reportado y de
+    quien lo escribio: el caso tiene que poder leerse despues de resuelto.
+    """
+
+    LIMITE_DETALLE = 500
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publicacion = models.ForeignKey(
+        Publicacion, models.SET_NULL, null=True, blank=True, related_name='reportes',
+    )
+    comentario = models.ForeignKey(
+        Comentario, models.SET_NULL, null=True, blank=True, related_name='reportes',
+    )
+    reportado_por = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, related_name='reportes_hechos',
+    )
+    motivo = models.CharField(max_length=20, choices=MotivoReporte.choices)
+    detalle = models.CharField(max_length=LIMITE_DETALLE, blank=True)
+    cuerpo_reportado = models.TextField()
+    autor_reportado = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, related_name='reportes_recibidos',
+    )
+    estado = models.CharField(
+        max_length=20, choices=EstadoReporte.choices, default=EstadoReporte.PENDIENTE,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    resuelto_por = models.ForeignKey(
+        'Usuario', models.SET_NULL, null=True, blank=True, related_name='reportes_resueltos',
+    )
+    resuelto_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['creado_en', 'id']
+        indexes = [models.Index(fields=['estado', 'creado_en'])]
+        constraints = [
+            # Una cuenta no reporta dos veces lo mismo mientras siga pendiente.
+            models.UniqueConstraint(
+                fields=['reportado_por', 'publicacion'],
+                condition=models.Q(estado='pendiente', publicacion__isnull=False),
+                name='reporte_publicacion_pendiente_unico',
+            ),
+            models.UniqueConstraint(
+                fields=['reportado_por', 'comentario'],
+                condition=models.Q(estado='pendiente', comentario__isnull=False),
+                name='reporte_comentario_pendiente_unico',
+            ),
+        ]
+
+
 class EstadoUsuario(models.TextChoices):
     PENDIENTE = "pendiente", "Pendiente"
     ACTIVO = "activo", "Activo"
@@ -220,6 +388,17 @@ class EstadoPostulacion(models.TextChoices):
     SHORTLIST = "shortlist", "Lista corta"
     RECHAZADO = "rechazado", "Rechazado"
     CONTRATADO = "contratado", "Contratado"
+    # La pone el propio aspirante al cancelar; el reclutador no la asigna.
+    RETIRADA = "retirada", "Retirada"
+
+
+# Mientras la postulación está en uno de estos, el aspirante puede retirarla.
+# Rechazada y contratada ya son un final, y retirada ya está retirada.
+ESTADOS_RETIRABLES = (
+    EstadoPostulacion.NUEVO,
+    EstadoPostulacion.REVISION,
+    EstadoPostulacion.SHORTLIST,
+)
 
 
 class EstadoExpediente(models.TextChoices):
@@ -721,6 +900,40 @@ class Postulacion(TablaExistente):
         ]
 
 
+class EventoPostulacion(models.Model):
+    """
+    Un paso del proceso de selección, para la línea de tiempo de la postulación.
+
+    `postulaciones` sólo guarda el estado vigente: mover la etapa sobreescribe
+    la anterior. Aquí queda cada foto (estado, etapa, progreso) con su fecha,
+    que es lo que el aspirante ve como historial.
+
+    Tabla administrada por Django, como las del muro: no existe en
+    database/schema.sql. `registrado_por` es dato interno —quién movió el
+    proceso— y no viaja al aspirante.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    postulacion = models.ForeignKey(
+        Postulacion, models.CASCADE, related_name='eventos'
+    )
+    estado = models.CharField(max_length=20, choices=EstadoPostulacion.choices)
+    etapa = models.CharField(max_length=120)
+    progreso = models.SmallIntegerField()
+    registrado_por = models.ForeignKey(
+        'Usuario',
+        models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eventos_postulacion',
+    )
+    ocurrido_en = models.DateTimeField()
+
+    class Meta:
+        ordering = ['ocurrido_en', 'id']
+        indexes = [models.Index(fields=['postulacion', 'ocurrido_en'])]
+
+
 class DocumentoAspirante(TablaExistente):
     id = models.UUIDField(primary_key=True)
     aspirante = models.ForeignKey(
@@ -816,6 +1029,32 @@ class ReportePsicometrico(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "reportes_psicometricos"
+
+    @property
+    def pagado(self):
+        """Si tiene una orden cobrada. Un reembolso la saca de COMPLETED.
+
+        El listado lo trae anotado (`pagado_anotado`) para no preguntar fila
+        por fila; suelto, se consulta.
+        """
+        anotado = getattr(self, "pagado_anotado", None)
+        if anotado is not None:
+            return anotado
+        return self.ordenes_pago.filter(
+            estado=EstadoPagoPaypal.COMPLETED
+        ).exists()
+
+    @property
+    def requiere_pago(self):
+        """Lo que aplicó la plataforma con precio se abre al pagarlo.
+
+        Lo que archivó la propia persona es suyo desde el principio.
+        """
+        return (
+            self.origen == OrigenReportePsicometrico.PLATAFORMA
+            and self.precio > 0
+            and not self.pagado
+        )
 
 
 class HistorialReportePsicometrico(TablaExistente):

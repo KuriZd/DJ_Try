@@ -1,21 +1,25 @@
 import hashlib
+from collections.abc import Mapping
 import uuid
 from datetime import datetime, timezone as datetime_timezone
 
 from django.db import IntegrityError, connection, transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
+from django.http import FileResponse, Http404
+from django.db.models.functions import Lower
 from django.utils import timezone
 from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
+from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import (
+    action,
     api_view,
     authentication_classes,
     parser_classes,
     permission_classes,
     throttle_classes,
 )
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
@@ -39,6 +43,7 @@ from core.models import (
     CompraPaquetePsicometrico,
     Usuario as UsuarioModel,
     EstadoCompraPaquete,
+    EstadoPagoPaypal,
     EstadoReportePsicometrico,
     EstadoVacante,
     HistorialReportePsicometrico,
@@ -66,6 +71,12 @@ from core.services.pagos import (
 from core.services.paypal import PaypalConfigurationError, PaypalError
 from core.services import avisos
 from core.services import tokens as tokens_service
+from core.services.postulaciones import (
+    PostulacionNoRetirable,
+    PostulacionRetirada,
+    avanzar_postulacion,
+    retirar_postulacion,
+)
 
 from .serializers import (
     AspiranteSerializer,
@@ -79,6 +90,8 @@ from .serializers import (
     LoginSerializer,
     PaquetePsicometricoSerializer,
     PerfilUpdateSerializer,
+    EventoPostulacionSerializer,
+    PostulacionAvanceSerializer,
     PostulacionCrearSerializer,
     PostulacionSerializer,
     ReportePsicometricoSerializer,
@@ -171,16 +184,25 @@ def token_response(usuario, refresh):
     }
 
 
+@transaction.atomic
 def abrir_sesion(usuario, request):
     """
     Emite el par de tokens y registra la sesión. Lo comparten el acceso y el
     alta de cuenta, que entra autenticada.
     """
+    # Serializar con el cambio de contrasena evita abrir una sesion con una
+    # validacion de password que termino justo antes de una recuperacion.
+    actual = UsuarioModel.objects.select_for_update().get(pk=usuario.pk)
+    if actual.password_hash != usuario.password_hash or not actual.is_active or actual.eliminado_en:
+        raise AuthenticationFailed("Las credenciales cambiaron. Inicia sesión de nuevo.")
+    usuario = actual
+    session_id = uuid.uuid4()
     refresh = RefreshToken.for_user(usuario)
     refresh["email"] = usuario.email
+    refresh["sid"] = str(session_id)
 
     Sesion.objects.create(
-        id=uuid.uuid4(),
+        id=session_id,
         usuario=usuario,
         refresh_token_hash=token_hash(str(refresh)),
         ip=request.META.get("REMOTE_ADDR"),
@@ -212,10 +234,18 @@ def login(request):
 @throttle_classes([RegistroRateThrottle])
 @transaction.atomic
 def registro(request):
-    """Da de alta una cuenta con su expediente y la deja autenticada."""
+    """Da de alta una cuenta con su expediente y la deja autenticada.
+
+    Manda de una vez el enlace para verificar el correo, que Actualiza exige
+    para escribir. `enviar_verificacion` nunca lanza: si el correo falla, la
+    cuenta queda creada y el enlace se puede pedir de nuevo desde Actualiza.
+    """
     serializer = RegistroSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     usuario = serializer.save()
+
+    token = tokens_service.emitir(usuario, PropositoToken.VERIFICACION)
+    avisos.enviar_verificacion(usuario, token)
 
     return Response(abrir_sesion(usuario, request), status=HTTP_201_CREATED)
 
@@ -224,7 +254,11 @@ def registro(request):
 @permission_classes([AllowAny])
 @throttle_classes([RefreshRateThrottle])
 def refresh_token(request):
+    if not isinstance(request.data, Mapping):
+        raise ValidationError({"detail": "El cuerpo debe ser un objeto JSON."})
     raw_refresh = request.data.get("refresh")
+    if not isinstance(raw_refresh, str):
+        raise ValidationError({"refresh": "Indica un token de texto."})
     if not raw_refresh:
         return Response(
             {"detail": "El campo refresh es obligatorio."},
@@ -233,18 +267,20 @@ def refresh_token(request):
 
     try:
         refresh = RefreshToken(raw_refresh)
+        session_id = uuid.UUID(str(refresh.get("sid", "")))
         session = Sesion.objects.select_related("usuario").get(
+            id=session_id,
             refresh_token_hash=token_hash(raw_refresh),
             revocada_en__isnull=True,
             expira_en__gt=timezone.now(),
         )
-    except (TokenError, Sesion.DoesNotExist):
+    except (TokenError, Sesion.DoesNotExist, ValueError):
         return Response(
             {"detail": "El refresh token no es válido o fue revocado."},
             status=HTTP_401_UNAUTHORIZED,
         )
 
-    if not session.usuario.is_active:
+    if not session.usuario.is_active or session.usuario.eliminado_en:
         return Response(
             {"detail": "El usuario no está activo."},
             status=HTTP_401_UNAUTHORIZED,
@@ -259,7 +295,11 @@ def refresh_token(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def logout(request):
+    if not isinstance(request.data, Mapping):
+        raise ValidationError({"detail": "El cuerpo debe ser un objeto JSON."})
     raw_refresh = request.data.get("refresh")
+    if not isinstance(raw_refresh, str):
+        raise ValidationError({"refresh": "Indica un token de texto."})
     if not raw_refresh:
         return Response(
             {"detail": "El campo refresh es obligatorio."},
@@ -297,6 +337,7 @@ def usuario_actual(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def cambiar_password(request):
     """
     Cambia la contraseña del usuario autenticado.
@@ -305,8 +346,9 @@ def cambiar_password(request):
     `refresh`, esa sesión se conserva para no expulsarlo del navegador actual;
     si no lo envía, se revocan todas.
     """
+    usuario = UsuarioModel.objects.select_for_update().get(pk=request.user.pk)
     serializer = CambioPasswordSerializer(
-        data=request.data, context={"usuario": request.user}
+        data=request.data, context={"usuario": usuario}
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
@@ -315,7 +357,7 @@ def cambiar_password(request):
         usuario=request.user, revocada_en__isnull=True
     )
 
-    raw_refresh = request.data.get("refresh")
+    raw_refresh = serializer.validated_data.get("refresh")
     if raw_refresh:
         sesiones = sesiones.exclude(refresh_token_hash=token_hash(raw_refresh))
 
@@ -372,6 +414,7 @@ def recuperar_password(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RestablecerRateThrottle])
+@transaction.atomic
 def restablecer_password(request):
     """Cambia la contrasena con el token del correo.
 
@@ -727,7 +770,7 @@ class UsuarioViewSet(viewsets.ReadOnlyModelViewSet):
             # Por nombre: el padron se lee buscando a alguien, y el orden
             # alfabetico es el unico que ayuda a eso. El id desempata para que
             # dos homonimos no bailen entre peticiones.
-            .order_by("nombre_completo", "id")
+            .order_by(Lower("nombre_completo"), "id")
         )
 
 
@@ -898,6 +941,26 @@ class PuedePostularse(BasePermission):
         return expediente_de(request) is not None
 
 
+class PuedeMoverPostulaciones(BasePermission):
+    """
+    Mover el proceso de selección: `postulaciones:administrar`.
+
+    Lo tienen administrador y reclutador. El rol de sólo consulta lee el
+    proceso completo con `consultar-todas` pero no lo toca, y el aspirante no
+    mueve su propia postulación.
+
+    Se revisa antes de buscar el registro, así que un aspirante que pide el
+    PATCH de una postulación ajena recibe 403 sin enterarse de si existe.
+    """
+
+    message = "No tienes permiso para actualizar el proceso de selección."
+
+    def has_permission(self, request, view):
+        if request.method != "PATCH":
+            return True
+        return "postulaciones:administrar" in permisos_de(request.user)
+
+
 class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     """
     Postulaciones al proceso de selección.
@@ -918,6 +981,7 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
         IsAuthenticated,
         PuedeConsultarPostulaciones,
         PuedePostularse,
+        PuedeMoverPostulaciones,
     ]
 
     def get_queryset(self):
@@ -971,6 +1035,86 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
         )
         return Response(salida.data, status=HTTP_201_CREATED)
 
+    @swagger_auto_schema(
+        request_body=PostulacionAvanceSerializer,
+        responses={200: PostulacionSerializer},
+    )
+    def partial_update(self, request, *args, **kwargs):
+        """
+        Mueve el proceso (estado, etapa, progreso) y lo deja en el historial.
+
+        Sólo PATCH: no se define `update`, así que PUT responde 405. Mandar la
+        postulación completa no tiene sentido cuando sólo tres campos son
+        editables.
+        """
+        postulacion = self.get_object()
+        entrada = PostulacionAvanceSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+
+        try:
+            postulacion = avanzar_postulacion(
+                postulacion, entrada.validated_data, request.user
+            )
+        except PostulacionRetirada:
+            raise ValidationError(
+                {"estado": "No se puede avanzar una postulación retirada."}
+            )
+
+        salida = PostulacionSerializer(
+            postulacion, context=self.get_serializer_context()
+        )
+        return Response(salida.data)
+
+    @swagger_auto_schema(
+        method="post",
+        request_body=no_body,
+        responses={200: PostulacionSerializer},
+    )
+    @action(detail=True, methods=["post"])
+    def retirar(self, request, pk=None):
+        """
+        El aspirante cancela su propia postulación.
+
+        `get_object` ya recorta al aspirante a lo suyo (404 en la ajena), pero
+        el equipo con `consultar-todas` sí encuentra cualquiera: retirarse es
+        decisión de quien se postuló, así que se compara la cuenta y no un
+        permiso.
+        """
+        postulacion = self.get_object()
+        if postulacion.aspirante.usuario_id != request.user.pk:
+            raise PermissionDenied(
+                "Sólo quien se postuló puede retirar su postulación."
+            )
+
+        try:
+            postulacion = retirar_postulacion(postulacion, request.user)
+        except PostulacionNoRetirable:
+            raise ValidationError(
+                {"estado": "La postulación no se puede retirar en su estado actual."}
+            )
+
+        salida = PostulacionSerializer(
+            postulacion, context=self.get_serializer_context()
+        )
+        return Response(salida.data)
+
+    @swagger_auto_schema(
+        method="get",
+        responses={200: EventoPostulacionSerializer(many=True)},
+    )
+    @action(detail=True, methods=["get"])
+    def historial(self, request, pk=None):
+        """
+        Línea de tiempo de la postulación, del paso más viejo al más nuevo.
+
+        Pasa por `get_object`, así que hereda el alcance del queryset: el
+        aspirante sólo ve el historial de las suyas, y pedir el de otra
+        responde 404 como el detalle.
+        """
+        postulacion = self.get_object()
+        eventos = postulacion.eventos.all()
+        return Response(EventoPostulacionSerializer(eventos, many=True).data)
+
 
 PERMISO_ADMIN_REPORTES = "reportes-psicometricos:administrar"
 PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
@@ -1009,9 +1153,18 @@ class ReportePsicometricoViewSet(
     def get_queryset(self):
         # La fecha de aplicacion manda; los reportes que no la traen no se
         # cuelan al principio por ser NULL, que es el orden natural de Postgres.
-        base = ReportePsicometrico.objects.select_related(
-            "aspirante", "subido_por"
-        ).order_by(F("aplicada_en").desc(nulls_last=True), "-creado_en")
+        base = (
+            ReportePsicometrico.objects.select_related("aspirante", "subido_por")
+            .annotate(
+                pagado_anotado=Exists(
+                    OrdenPagoPaypal.objects.filter(
+                        reporte=OuterRef("pk"),
+                        estado=EstadoPagoPaypal.COMPLETED,
+                    )
+                )
+            )
+            .order_by(F("aplicada_en").desc(nulls_last=True), "-creado_en")
+        )
 
         if PERMISO_ADMIN_REPORTES in permisos_de(self.request.user):
             aspirante = self.request.query_params.get("aspirante")
@@ -1022,6 +1175,42 @@ class ReportePsicometricoViewSet(
         return base.filter(aspirante__usuario=self.request.user).exclude(
             estado=EstadoReportePsicometrico.DESHABILITADO
         )
+
+    @swagger_auto_schema(
+        responses={
+            200: openapi.Response(
+                "PDF privado", schema=openapi.Schema(type=openapi.TYPE_FILE)
+            ),
+            403: "El reporte se abre al pagarlo.",
+        }
+    )
+    @action(detail=True, methods=["get"])
+    def descargar(self, request, pk=None):
+        """El PDF del reporte, sólo para quien ya lo puede ver completo.
+
+        Pasa por el API y no por una URL pública: el archivo vive fuera de
+        lo que se sirve, y la regla de quién lo abre es la misma que oculta
+        los resultados en el listado.
+        """
+        reporte = self.get_object()
+        es_admin = PERMISO_ADMIN_REPORTES in permisos_de(request.user)
+        if not es_admin and reporte.requiere_pago:
+            raise PermissionDenied("Este reporte se abre al pagarlo.")
+
+        try:
+            archivo = reporte.archivo.open("rb")
+        except FileNotFoundError as error:
+            raise Http404("El archivo del reporte no está disponible.") from error
+
+        nombre = reporte.referencia_evaluacion_externa or str(reporte.id)
+        respuesta = FileResponse(
+            archivo,
+            as_attachment=True,
+            filename=f"{nombre}.pdf",
+            content_type="application/pdf",
+        )
+        respuesta["X-Content-Type-Options"] = "nosniff"
+        return respuesta
 
     def perform_destroy(self, instance):
         """Retira el documento del expediente sin borrar el rastro.

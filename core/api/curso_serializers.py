@@ -5,6 +5,8 @@ from core.models import (
     CategoriaCurso, Curso, Leccion, Modulo, Inscripcion, ProgresoLeccion,
     CertificadoCurso, Usuario, Video,
 )
+from core.services import portadas_curso
+
 from .curso_permissions import administra_cursos, gestiona_curso
 from .serializers import permisos_de
 
@@ -56,6 +58,10 @@ class CursoSerializer(ResumenTemarioMixin, serializers.ModelSerializer):
     )
     instructor_nombre = serializers.CharField(source='instructor.nombre_completo', read_only=True)
     categoria = CategoriaField()
+    # Solo lectura: la caratula entra por `cursos/{slug}/portada/`, que
+    # comprueba en S3 que el archivo es la imagen que dice ser. Una URL
+    # escrita a mano se saltaria esa revision.
+    imagen = serializers.SerializerMethodField()
     total_modulos = serializers.SerializerMethodField()
     total_lecciones = serializers.SerializerMethodField()
     duracion_total = serializers.SerializerMethodField()
@@ -67,6 +73,9 @@ class CursoSerializer(ResumenTemarioMixin, serializers.ModelSerializer):
                   'duracion_estimada', 'categoria', 'nivel',
                   'total_modulos', 'total_lecciones', 'duracion_total']
         read_only_fields = ['id', 'slug', 'fecha_creacion']
+
+    def get_imagen(self, obj):
+        return portadas_curso.url_de_lectura(obj)
 
     def validate_objetivos(self, value):
         if not isinstance(value, list) or any(
@@ -168,6 +177,30 @@ class InscripcionSerializer(serializers.ModelSerializer):
         fields = ['id', 'usuario', 'curso', 'curso_slug', 'fecha_inscripcion',
                   'completado', 'porcentaje_avance']
         read_only_fields = fields
+
+
+class PedirPortadaSerializer(serializers.Serializer):
+    """Lo que el navegador declara antes de subir la caratula. Se vuelve a
+    comprobar contra el archivo real al confirmar: esto solo evita firmar una
+    subida que de antemano no va a pasar."""
+
+    content_type = serializers.ChoiceField(
+        choices=sorted(portadas_curso.FORMATOS),
+        error_messages={'invalid_choice': 'La caratula tiene que ser JPG, PNG o WebP.'},
+    )
+    tamano = serializers.IntegerField(min_value=1)
+
+    def validate_tamano(self, value):
+        from django.conf import settings
+
+        if value > settings.CURSO_PORTADA_MAX_BYTES:
+            limite = settings.CURSO_PORTADA_MAX_BYTES // (1024 * 1024)
+            raise serializers.ValidationError(f'La caratula no puede pasar de {limite} MB.')
+        return value
+
+
+class ConfirmarPortadaSerializer(serializers.Serializer):
+    clave = serializers.CharField(max_length=512)
 
 
 class InscribirSerializer(serializers.Serializer):

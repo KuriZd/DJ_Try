@@ -5,12 +5,18 @@ usuarios, aspirantes, perfiles profesionales, postulaciones y certificados.
 
 ## Documentación del proyecto
 
+- [Primera versión en Azure](docs/PRODUCCION_AZURE.md): perfil de producción, variables, arranque y aceptación en staging.
+
 - [Certificados](docs/CERTIFICADOS.md): emisión, PDF, permisos y contrato para el frontend.
 
 - [Guía completa](docs/GUIA_COMPLETA.md): configuración, autenticación y endpoints.
 - [Video privado en S3](docs/VIDEO_S3.md): modelos, API, permisos y reproductor.
 - [Operación de video](docs/VIDEO_S3_OPERACION.md): backup, migraciones y smoke test.
 - [Correo transaccional](docs/CORREO.md): configuración, envíos y reintentos.
+
+Videos, fotos y portadas admiten Azure Blob mediante `MEDIA_STORAGE_PROVIDER=azure`.
+La configuración local privada está en `.env.azure`; consultar
+[operación de Azure Blob](docs/VIDEO_S3_OPERACION.md#azure-blob) para CORS y subidas.
 
 ### Estado del video — 10 de septiembre de 2026
 
