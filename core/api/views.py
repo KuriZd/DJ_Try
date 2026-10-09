@@ -4,13 +4,15 @@ import uuid
 from datetime import datetime, timezone as datetime_timezone
 
 from django.db import IntegrityError, connection, transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
+from django.http import FileResponse, Http404
 from django.db.models.functions import Lower
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import (
+    action,
     api_view,
     authentication_classes,
     parser_classes,
@@ -41,6 +43,7 @@ from core.models import (
     CompraPaquetePsicometrico,
     Usuario as UsuarioModel,
     EstadoCompraPaquete,
+    EstadoPagoPaypal,
     EstadoReportePsicometrico,
     EstadoVacante,
     HistorialReportePsicometrico,
@@ -68,6 +71,7 @@ from core.services.pagos import (
 from core.services.paypal import PaypalConfigurationError, PaypalError
 from core.services import avisos
 from core.services import tokens as tokens_service
+from core.services.postulaciones import avanzar_postulacion
 
 from .serializers import (
     AspiranteSerializer,
@@ -81,6 +85,8 @@ from .serializers import (
     LoginSerializer,
     PaquetePsicometricoSerializer,
     PerfilUpdateSerializer,
+    EventoPostulacionSerializer,
+    PostulacionAvanceSerializer,
     PostulacionCrearSerializer,
     PostulacionSerializer,
     ReportePsicometricoSerializer,
@@ -930,6 +936,26 @@ class PuedePostularse(BasePermission):
         return expediente_de(request) is not None
 
 
+class PuedeMoverPostulaciones(BasePermission):
+    """
+    Mover el proceso de selección: `postulaciones:administrar`.
+
+    Lo tienen administrador y reclutador. El rol de sólo consulta lee el
+    proceso completo con `consultar-todas` pero no lo toca, y el aspirante no
+    mueve su propia postulación.
+
+    Se revisa antes de buscar el registro, así que un aspirante que pide el
+    PATCH de una postulación ajena recibe 403 sin enterarse de si existe.
+    """
+
+    message = "No tienes permiso para actualizar el proceso de selección."
+
+    def has_permission(self, request, view):
+        if request.method != "PATCH":
+            return True
+        return "postulaciones:administrar" in permisos_de(request.user)
+
+
 class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     """
     Postulaciones al proceso de selección.
@@ -950,6 +976,7 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
         IsAuthenticated,
         PuedeConsultarPostulaciones,
         PuedePostularse,
+        PuedeMoverPostulaciones,
     ]
 
     def get_queryset(self):
@@ -1003,6 +1030,48 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
         )
         return Response(salida.data, status=HTTP_201_CREATED)
 
+    @swagger_auto_schema(
+        request_body=PostulacionAvanceSerializer,
+        responses={200: PostulacionSerializer},
+    )
+    def partial_update(self, request, *args, **kwargs):
+        """
+        Mueve el proceso (estado, etapa, progreso) y lo deja en el historial.
+
+        Sólo PATCH: no se define `update`, así que PUT responde 405. Mandar la
+        postulación completa no tiene sentido cuando sólo tres campos son
+        editables.
+        """
+        postulacion = self.get_object()
+        entrada = PostulacionAvanceSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+
+        postulacion = avanzar_postulacion(
+            postulacion, entrada.validated_data, request.user
+        )
+
+        salida = PostulacionSerializer(
+            postulacion, context=self.get_serializer_context()
+        )
+        return Response(salida.data)
+
+    @swagger_auto_schema(
+        method="get",
+        responses={200: EventoPostulacionSerializer(many=True)},
+    )
+    @action(detail=True, methods=["get"])
+    def historial(self, request, pk=None):
+        """
+        Línea de tiempo de la postulación, del paso más viejo al más nuevo.
+
+        Pasa por `get_object`, así que hereda el alcance del queryset: el
+        aspirante sólo ve el historial de las suyas, y pedir el de otra
+        responde 404 como el detalle.
+        """
+        postulacion = self.get_object()
+        eventos = postulacion.eventos.all()
+        return Response(EventoPostulacionSerializer(eventos, many=True).data)
+
 
 PERMISO_ADMIN_REPORTES = "reportes-psicometricos:administrar"
 PERMISO_SUBIR_REPORTE_PROPIO = "reportes-psicometricos:subir-propio"
@@ -1041,9 +1110,18 @@ class ReportePsicometricoViewSet(
     def get_queryset(self):
         # La fecha de aplicacion manda; los reportes que no la traen no se
         # cuelan al principio por ser NULL, que es el orden natural de Postgres.
-        base = ReportePsicometrico.objects.select_related(
-            "aspirante", "subido_por"
-        ).order_by(F("aplicada_en").desc(nulls_last=True), "-creado_en")
+        base = (
+            ReportePsicometrico.objects.select_related("aspirante", "subido_por")
+            .annotate(
+                pagado_anotado=Exists(
+                    OrdenPagoPaypal.objects.filter(
+                        reporte=OuterRef("pk"),
+                        estado=EstadoPagoPaypal.COMPLETED,
+                    )
+                )
+            )
+            .order_by(F("aplicada_en").desc(nulls_last=True), "-creado_en")
+        )
 
         if PERMISO_ADMIN_REPORTES in permisos_de(self.request.user):
             aspirante = self.request.query_params.get("aspirante")
@@ -1054,6 +1132,42 @@ class ReportePsicometricoViewSet(
         return base.filter(aspirante__usuario=self.request.user).exclude(
             estado=EstadoReportePsicometrico.DESHABILITADO
         )
+
+    @swagger_auto_schema(
+        responses={
+            200: openapi.Response(
+                "PDF privado", schema=openapi.Schema(type=openapi.TYPE_FILE)
+            ),
+            403: "El reporte se abre al pagarlo.",
+        }
+    )
+    @action(detail=True, methods=["get"])
+    def descargar(self, request, pk=None):
+        """El PDF del reporte, sólo para quien ya lo puede ver completo.
+
+        Pasa por el API y no por una URL pública: el archivo vive fuera de
+        lo que se sirve, y la regla de quién lo abre es la misma que oculta
+        los resultados en el listado.
+        """
+        reporte = self.get_object()
+        es_admin = PERMISO_ADMIN_REPORTES in permisos_de(request.user)
+        if not es_admin and reporte.requiere_pago:
+            raise PermissionDenied("Este reporte se abre al pagarlo.")
+
+        try:
+            archivo = reporte.archivo.open("rb")
+        except FileNotFoundError as error:
+            raise Http404("El archivo del reporte no está disponible.") from error
+
+        nombre = reporte.referencia_evaluacion_externa or str(reporte.id)
+        respuesta = FileResponse(
+            archivo,
+            as_attachment=True,
+            filename=f"{nombre}.pdf",
+            content_type="application/pdf",
+        )
+        respuesta["X-Content-Type-Options"] = "nosniff"
+        return respuesta
 
     def perform_destroy(self, instance):
         """Retira el documento del expediente sin borrar el rastro.
