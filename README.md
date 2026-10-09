@@ -14,6 +14,10 @@ usuarios, aspirantes, perfiles profesionales, postulaciones y certificados.
 - [Operación de video](docs/VIDEO_S3_OPERACION.md): backup, migraciones y smoke test.
 - [Correo transaccional](docs/CORREO.md): configuración, envíos y reintentos.
 
+Videos, fotos y portadas admiten Azure Blob mediante `MEDIA_STORAGE_PROVIDER=azure`.
+La configuración local privada está en `.env.azure`; consultar
+[operación de Azure Blob](docs/VIDEO_S3_OPERACION.md#azure-blob) para CORS y subidas.
+
 ### Estado del video — 10 de septiembre de 2026
 
 Implementados PUT directo a S3 (firma de 10 minutos), confirmación con
