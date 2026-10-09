@@ -39,7 +39,8 @@ la que te registraste**, y compara distinguiendo mayúsculas.
 | `EMAIL_BACKEND` | consola si `DEBUG`, si no smtp | Por dónde sale |
 | `EMAIL_HOST` / `EMAIL_PORT` | `localhost` / `587` | Servidor SMTP |
 | `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` | vacías | Credenciales |
-| `EMAIL_USE_TLS` | `True` | Cifrado |
+| `EMAIL_USE_TLS` | `True` | STARTTLS (habitualmente puerto 587) |
+| `EMAIL_USE_SSL` | `False` | SSL directo (habitualmente puerto 465); requiere `EMAIL_USE_TLS=False` |
 | `EMAIL_TIMEOUT` | `5` | Segundos. Corto a propósito: el envío ocurre dentro de la petición |
 | `DEFAULT_FROM_EMAIL` | `AISER <no-reply@aiser.mx>` | Remitente |
 | `EMAIL_REDIRIGIR_A` | vacía | **Jaula de pruebas**: desvía todo a esa dirección |
