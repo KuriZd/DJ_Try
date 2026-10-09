@@ -9,7 +9,7 @@ from django.http import FileResponse, Http404
 from django.db.models.functions import Lower
 from django.utils import timezone
 from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
+from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import (
     action,
@@ -71,7 +71,12 @@ from core.services.pagos import (
 from core.services.paypal import PaypalConfigurationError, PaypalError
 from core.services import avisos
 from core.services import tokens as tokens_service
-from core.services.postulaciones import avanzar_postulacion
+from core.services.postulaciones import (
+    PostulacionNoRetirable,
+    PostulacionRetirada,
+    avanzar_postulacion,
+    retirar_postulacion,
+)
 
 from .serializers import (
     AspiranteSerializer,
@@ -1046,9 +1051,43 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
         entrada = PostulacionAvanceSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
 
-        postulacion = avanzar_postulacion(
-            postulacion, entrada.validated_data, request.user
+        try:
+            postulacion = avanzar_postulacion(
+                postulacion, entrada.validated_data, request.user
+            )
+        except PostulacionRetirada as error:
+            raise ValidationError({"estado": str(error)})
+
+        salida = PostulacionSerializer(
+            postulacion, context=self.get_serializer_context()
         )
+        return Response(salida.data)
+
+    @swagger_auto_schema(
+        method="post",
+        request_body=no_body,
+        responses={200: PostulacionSerializer},
+    )
+    @action(detail=True, methods=["post"])
+    def retirar(self, request, pk=None):
+        """
+        El aspirante cancela su propia postulación.
+
+        `get_object` ya recorta al aspirante a lo suyo (404 en la ajena), pero
+        el equipo con `consultar-todas` sí encuentra cualquiera: retirarse es
+        decisión de quien se postuló, así que se compara la cuenta y no un
+        permiso.
+        """
+        postulacion = self.get_object()
+        if postulacion.aspirante.usuario_id != request.user.pk:
+            raise PermissionDenied(
+                "Sólo quien se postuló puede retirar su postulación."
+            )
+
+        try:
+            postulacion = retirar_postulacion(postulacion, request.user)
+        except PostulacionNoRetirable as error:
+            raise ValidationError({"estado": str(error)})
 
         salida = PostulacionSerializer(
             postulacion, context=self.get_serializer_context()
