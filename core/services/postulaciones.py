@@ -10,9 +10,18 @@ el aspirante viera un historial incompleto.
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import EventoPostulacion, Postulacion
+from core.models import (
+    ESTADOS_RETIRABLES,
+    EstadoPostulacion,
+    EventoPostulacion,
+    Postulacion,
+)
 
 CAMPOS_DEL_PROCESO = ("estado", "etapa", "progreso")
+
+
+class PostulacionRetirada(Exception):
+    """El aspirante ya la retiró: el proceso no se mueve más."""
 
 
 def registrar_evento(postulacion, usuario=None, ocurrido_en=None):
@@ -40,6 +49,13 @@ def avanzar_postulacion(postulacion, cambios, usuario):
     with transaction.atomic():
         vigente = Postulacion.objects.select_for_update().get(pk=postulacion.pk)
 
+        # Retirarse es decisión del aspirante: el reclutador no la deshace
+        # moviéndola de nuevo a un estado del proceso.
+        if vigente.estado == EstadoPostulacion.RETIRADA:
+            raise PostulacionRetirada(
+                "El aspirante retiró esta postulación; ya no se puede mover."
+            )
+
         reales = {
             campo: valor
             for campo, valor in cambios.items()
@@ -57,3 +73,35 @@ def avanzar_postulacion(postulacion, cambios, usuario):
         registrar_evento(vigente, usuario=usuario, ocurrido_en=ahora)
 
     return vigente
+
+
+ETAPA_RETIRADA = "Postulación retirada por el aspirante"
+
+
+class PostulacionNoRetirable(Exception):
+    """La postulación ya llegó a un final y no hay nada que retirar."""
+
+
+def retirar_postulacion(postulacion, usuario):
+    """
+    El aspirante cancela su postulación: pasa a `retirada` y queda en el
+    historial. No se borra —el reclutador necesita ver que se retiró, y el
+    historial es justo lo que el aspirante consulta—, y el progreso se
+    conserva tal cual: dice hasta dónde llegó el proceso.
+
+    Se comprueba el estado dentro del bloqueo para que un reclutador que la
+    rechaza al mismo tiempo no termine con una rechazada "retirada".
+    """
+    with transaction.atomic():
+        vigente = Postulacion.objects.select_for_update().get(pk=postulacion.pk)
+
+        if vigente.estado not in ESTADOS_RETIRABLES:
+            raise PostulacionNoRetirable(
+                "Esta postulación ya no se puede retirar: el proceso terminó."
+            )
+
+        return avanzar_postulacion(
+            vigente,
+            {"estado": EstadoPostulacion.RETIRADA, "etapa": ETAPA_RETIRADA},
+            usuario,
+        )
