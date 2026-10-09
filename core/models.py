@@ -889,6 +889,40 @@ class Postulacion(TablaExistente):
         ]
 
 
+class EventoPostulacion(models.Model):
+    """
+    Un paso del proceso de selección, para la línea de tiempo de la postulación.
+
+    `postulaciones` sólo guarda el estado vigente: mover la etapa sobreescribe
+    la anterior. Aquí queda cada foto (estado, etapa, progreso) con su fecha,
+    que es lo que el aspirante ve como historial.
+
+    Tabla administrada por Django, como las del muro: no existe en
+    database/schema.sql. `registrado_por` es dato interno —quién movió el
+    proceso— y no viaja al aspirante.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    postulacion = models.ForeignKey(
+        Postulacion, models.CASCADE, related_name='eventos'
+    )
+    estado = models.CharField(max_length=20, choices=EstadoPostulacion.choices)
+    etapa = models.CharField(max_length=120)
+    progreso = models.SmallIntegerField()
+    registrado_por = models.ForeignKey(
+        'Usuario',
+        models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eventos_postulacion',
+    )
+    ocurrido_en = models.DateTimeField()
+
+    class Meta:
+        ordering = ['ocurrido_en', 'id']
+        indexes = [models.Index(fields=['postulacion', 'ocurrido_en'])]
+
+
 class DocumentoAspirante(TablaExistente):
     id = models.UUIDField(primary_key=True)
     aspirante = models.ForeignKey(
@@ -984,6 +1018,32 @@ class ReportePsicometrico(TablaExistente):
 
     class Meta(TablaExistente.Meta):
         db_table = "reportes_psicometricos"
+
+    @property
+    def pagado(self):
+        """Si tiene una orden cobrada. Un reembolso la saca de COMPLETED.
+
+        El listado lo trae anotado (`pagado_anotado`) para no preguntar fila
+        por fila; suelto, se consulta.
+        """
+        anotado = getattr(self, "pagado_anotado", None)
+        if anotado is not None:
+            return anotado
+        return self.ordenes_pago.filter(
+            estado=EstadoPagoPaypal.COMPLETED
+        ).exists()
+
+    @property
+    def requiere_pago(self):
+        """Lo que aplicó la plataforma con precio se abre al pagarlo.
+
+        Lo que archivó la propia persona es suyo desde el principio.
+        """
+        return (
+            self.origen == OrigenReportePsicometrico.PLATAFORMA
+            and self.precio > 0
+            and not self.pagado
+        )
 
 
 class HistorialReportePsicometrico(TablaExistente):
