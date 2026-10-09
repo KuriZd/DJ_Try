@@ -1055,8 +1055,10 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
             postulacion = avanzar_postulacion(
                 postulacion, entrada.validated_data, request.user
             )
-        except PostulacionRetirada as error:
-            raise ValidationError({"estado": str(error)})
+        except PostulacionRetirada:
+            raise ValidationError(
+                {"estado": "No se puede avanzar una postulación retirada."}
+            )
 
         salida = PostulacionSerializer(
             postulacion, context=self.get_serializer_context()
