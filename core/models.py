@@ -388,6 +388,17 @@ class EstadoPostulacion(models.TextChoices):
     SHORTLIST = "shortlist", "Lista corta"
     RECHAZADO = "rechazado", "Rechazado"
     CONTRATADO = "contratado", "Contratado"
+    # La pone el propio aspirante al cancelar; el reclutador no la asigna.
+    RETIRADA = "retirada", "Retirada"
+
+
+# Mientras la postulación está en uno de estos, el aspirante puede retirarla.
+# Rechazada y contratada ya son un final, y retirada ya está retirada.
+ESTADOS_RETIRABLES = (
+    EstadoPostulacion.NUEVO,
+    EstadoPostulacion.REVISION,
+    EstadoPostulacion.SHORTLIST,
+)
 
 
 class EstadoExpediente(models.TextChoices):
