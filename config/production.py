@@ -65,7 +65,10 @@ for origen in CORS_ALLOWED_ORIGINS + CSRF_TRUSTED_ORIGINS:
 if PAYPAL_MODE not in ('sandbox', 'live'):
     raise ImproperlyConfigured('PAYPAL_MODE debe ser sandbox o live.')
 for nombre in ('PAYPAL_CLIENT_ID', 'PAYPAL_CLIENT_SECRET', 'PAYPAL_WEBHOOK_ID',
-               'AWS_STORAGE_BUCKET_NAME', 'PRIVATE_MEDIA_ROOT', 'EMAIL_HOST', 'DEFAULT_FROM_EMAIL'):
+               'PRIVATE_MEDIA_ROOT', 'EMAIL_HOST', 'DEFAULT_FROM_EMAIL'):
+    requerido(nombre)
+for nombre in (('AZURE_ACCOUNT_NAME', 'AZURE_ACCOUNT_KEY', 'AZURE_CONTAINER')
+               if MEDIA_STORAGE_PROVIDER == 'azure' else ('AWS_STORAGE_BUCKET_NAME',)):
     requerido(nombre)
 if not MEDIA_ROOT.is_absolute():
     raise ImproperlyConfigured('PRIVATE_MEDIA_ROOT debe ser una ruta absoluta persistente.')
