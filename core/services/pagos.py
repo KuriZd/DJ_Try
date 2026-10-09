@@ -177,6 +177,10 @@ def _reservar_orden(*, reporte, comprador, clave_idempotencia, ip, user_agent):
             or reporte.precio <= 0
         ):
             raise PagoNoDisponible("El reporte no puede adquirirse.")
+        if reporte.ordenes_pago.filter(
+            estado=EstadoPagoPaypal.COMPLETED
+        ).exists():
+            raise PagoNoDisponible("Ese reporte ya está pagado.")
 
         misma_clave = _orden_con_misma_clave(
             comprador=comprador, clave_idempotencia=clave_idempotencia
