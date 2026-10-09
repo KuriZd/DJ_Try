@@ -278,8 +278,14 @@ class PostulacionAvanceSerializer(serializers.Serializer):
     aspirante de una postulación no cambian nunca.
     """
 
+    # Sin `retirada`: ésa la pone el aspirante al cancelar, no el reclutador.
     estado = serializers.ChoiceField(
-        choices=EstadoPostulacion.choices, required=False
+        choices=[
+            opcion
+            for opcion in EstadoPostulacion.choices
+            if opcion[0] != EstadoPostulacion.RETIRADA
+        ],
+        required=False,
     )
     etapa = serializers.CharField(max_length=120, required=False)
     progreso = serializers.IntegerField(
