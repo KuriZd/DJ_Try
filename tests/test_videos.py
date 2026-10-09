@@ -190,14 +190,17 @@ class VideoAPITests(TestCase):
         self.assertNotIn('s3_key', str(self.client.get(self.base).data))
 
 
+@override_settings(MEDIA_STORAGE_PROVIDER='s3')
 class VideoSigningTests(SimpleTestCase):
     def test_storage_signs_regional_host_without_redirect(self):
         from django.conf import settings
         from storages.backends.s3 import S3Storage
 
-        options = dict(settings.STORAGES['videos']['OPTIONS'])
-        options.update(bucket_name='regional-video-test', access_key='testing',
-                       secret_key='testing', security_token=None)
+        options = dict(bucket_name='regional-video-test', access_key='testing',
+                       secret_key='testing', security_token=None,
+                       region_name=settings.AWS_S3_REGION_NAME,
+                       endpoint_url=f'https://s3.{settings.AWS_S3_REGION_NAME}.amazonaws.com',
+                       signature_version='s3v4', addressing_style='virtual')
         storage = S3Storage(**options)
         client = storage.connection.meta.client
         expected = f'regional-video-test.s3.{settings.AWS_S3_REGION_NAME}.amazonaws.com'
