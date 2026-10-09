@@ -430,9 +430,10 @@ def restablecer_password(request):
         usuario = tokens_service.canjear(
             serializer.validated_data["token"], PropositoToken.RECUPERACION
         )
-    except tokens_service.TokenInvalido as error:
+    except tokens_service.TokenInvalido:
         return Response(
-            {"token": [str(error)]}, status=HTTP_400_BAD_REQUEST
+            {"token": ["El enlace no es valido, ya se uso o caduco."]},
+            status=HTTP_400_BAD_REQUEST,
         )
 
     serializer.save(usuario=usuario)
@@ -1090,7 +1091,7 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
             postulacion = retirar_postulacion(postulacion, request.user)
         except PostulacionNoRetirable:
             raise ValidationError(
-                {"estado": "La postulación no se puede retirar en su estado actual."}
+                {"estado": "Esta postulación ya no se puede retirar: el proceso terminó."}
             )
 
         salida = PostulacionSerializer(
