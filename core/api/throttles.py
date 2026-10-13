@@ -29,6 +29,26 @@ class LoginRateThrottle(IpRateThrottle):
         }
 
 
+class LoginIpRateThrottle(IpRateThrottle):
+    """Limita una IP aunque cambie el correo en cada solicitud."""
+
+    scope = "login_ip"
+
+
+class LoginAccountRateThrottle(SimpleRateThrottle):
+    """Limita una cuenta aunque los intentos lleguen desde distintas IPs."""
+
+    scope = "login_account"
+
+    def get_cache_key(self, request, view):
+        data = request.data if isinstance(request.data, Mapping) else {}
+        email = data.get("email")
+        if not isinstance(email, str) or not email.strip():
+            return None
+        digest = hashlib.sha256(email.strip().casefold().encode("utf-8")).hexdigest()
+        return self.cache_format % {"scope": self.scope, "ident": digest}
+
+
 class RegistroRateThrottle(IpRateThrottle):
     scope = "registro"
 
