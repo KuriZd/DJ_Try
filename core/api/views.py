@@ -104,6 +104,8 @@ from .serializers import (
 )
 from .throttles import (
     LoginRateThrottle,
+    LoginIpRateThrottle,
+    LoginAccountRateThrottle,
     RecuperarRateThrottle,
     RestablecerRateThrottle,
     PaypalWebhookRateThrottle,
@@ -220,7 +222,7 @@ def abrir_sesion(usuario, request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([LoginRateThrottle])
+@throttle_classes([LoginRateThrottle, LoginIpRateThrottle, LoginAccountRateThrottle])
 def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
