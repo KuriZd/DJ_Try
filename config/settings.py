@@ -302,6 +302,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'login': os.getenv('THROTTLE_LOGIN', '5/minute'),
+        'login_ip': os.getenv('THROTTLE_LOGIN_IP', '30/minute'),
+        'login_account': os.getenv('THROTTLE_LOGIN_ACCOUNT', '10/minute'),
         'registro': os.getenv('THROTTLE_REGISTRO', '5/hour'),
         'refresh': os.getenv('THROTTLE_REFRESH', '30/minute'),
         # Pedir un enlace de recuperacion es barato para quien lo pide y caro
