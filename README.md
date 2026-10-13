@@ -31,6 +31,17 @@ subida, confirmación, CORS y GET 206 correctos. Se fijó el endpoint regional
 para evitar redirecciones 307 del host global. Pendiente: reproducción y seek
 en el navegador real. Detalles en [la guía operativa](docs/VIDEO_S3_OPERACION.md).
 
+## Seguridad del login
+
+El login aplica tres límites compartidos entre workers: 5 intentos/minuto por
+IP y correo, 30/minuto por IP y 10/minuto por correo, normalizado sin distinguir
+mayúsculas. Se configuran mediante `THROTTLE_LOGIN`, `THROTTLE_LOGIN_IP` y
+`THROTTLE_LOGIN_ACCOUNT`. Cuentan también los accesos correctos; al superar
+un límite, la API devuelve 429 con `Retry-After`. El límite por cuenta puede
+afectar temporalmente al titular si otra persona intenta entrar con su correo.
+Los usuarios inexistentes ejecutan el hasher de contraseñas configurado antes
+de devolver el mismo error de credenciales incorrectas.
+
 ## Requisitos de instalación
 
 - Python 3.12+
