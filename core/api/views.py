@@ -104,6 +104,8 @@ from .serializers import (
 )
 from .throttles import (
     LoginRateThrottle,
+    LoginIpRateThrottle,
+    LoginAccountRateThrottle,
     RecuperarRateThrottle,
     RestablecerRateThrottle,
     PaypalWebhookRateThrottle,
@@ -220,7 +222,7 @@ def abrir_sesion(usuario, request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([LoginRateThrottle])
+@throttle_classes([LoginRateThrottle, LoginIpRateThrottle, LoginAccountRateThrottle])
 def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -430,9 +432,10 @@ def restablecer_password(request):
         usuario = tokens_service.canjear(
             serializer.validated_data["token"], PropositoToken.RECUPERACION
         )
-    except tokens_service.TokenInvalido as error:
+    except tokens_service.TokenInvalido:
         return Response(
-            {"token": [str(error)]}, status=HTTP_400_BAD_REQUEST
+            {"token": ["El enlace no es valido, ya se uso o caduco."]},
+            status=HTTP_400_BAD_REQUEST,
         )
 
     serializer.save(usuario=usuario)
@@ -1090,7 +1093,7 @@ class PostulacionViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet)
             postulacion = retirar_postulacion(postulacion, request.user)
         except PostulacionNoRetirable:
             raise ValidationError(
-                {"estado": "La postulación no se puede retirar en su estado actual."}
+                {"estado": "Esta postulación ya no se puede retirar: el proceso terminó."}
             )
 
         salida = PostulacionSerializer(

@@ -486,15 +486,13 @@ class LoginSerializer(serializers.Serializer):
             .first()
         )
 
-        # Se comprueba siempre un hash para reducir diferencias de tiempo.
-        encoded_password = (
-            usuario.password_hash
-            if usuario
-            else "pbkdf2_sha256$1$invalid$invalid"
-        )
-        password_is_valid = verify_password(attrs["password"], encoded_password)
+        if usuario is None:
+            # Ejecutar el hasher configurado con su costo real, igual que
+            # Django, sin un hash ficticio de una sola iteracion.
+            make_password(attrs["password"])
+            self.fail("invalid_credentials")
 
-        if usuario is None or not password_is_valid:
+        if not verify_password(attrs["password"], usuario.password_hash):
             self.fail("invalid_credentials")
         if not usuario.is_active:
             self.fail("inactive")
